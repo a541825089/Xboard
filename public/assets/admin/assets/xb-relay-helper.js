@@ -1,267 +1,786 @@
-;(function(){
-  function createButton(){
+;(function () {
+  const STATE = {
+    currentTab: 'relay',
+    nodes: [],
+    selectedNodeIds: new Set(),
+  }
+
+  function detectAdminBase() {
+    const path = window.location.pathname
+      .split('/')
+      .filter((p) => p !== '')
+    if (path.length === 0) {
+      return ''
+    }
+    return '/' + path[0]
+  }
+
+  function normalizeBase(base) {
+    if (!base) return ''
+    return base.startsWith('/') ? base : '/' + base
+  }
+
+  async function fetchJson(url, options = {}) {
+    const resp = await fetch(url, Object.assign({ credentials: 'same-origin' }, options))
+    return resp.json()
+  }
+
+  async function fetchTemplates(base) {
+    const url = normalizeBase(base) + '/server/manage/template/generate-templates'
+    return fetchJson(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+  }
+
+  async function generateRelay(base, shareLink) {
+    const url = normalizeBase(base) + '/server/manage/template/generate-relay'
+    return fetchJson(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share_link: shareLink, inbound_tag: 'vless-in' }),
+    })
+  }
+
+  async function testRelay(base, shareLink) {
+    const url = normalizeBase(base) + '/server/manage/template/test-relay'
+    return fetchJson(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share_link: shareLink }),
+    })
+  }
+
+  async function loadNodes(base) {
+    const url = normalizeBase(base) + '/server/manage/getNodes'
+    const res = await fetchJson(url)
+    if (res && res.data) {
+      STATE.nodes = res.data
+    }
+    return STATE.nodes
+  }
+
+  async function batchDelete(base, ids) {
+    const url = normalizeBase(base) + '/server/manage/batchDelete'
+    return fetchJson(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    })
+  }
+
+  function isOffline(node) {
+    return node.is_online === 0 || node.is_online === false || node.online === 0
+  }
+
+  function getSourceLabel(node) {
+    if (node.machine_id && node.machine_id !== 0) {
+      return 'Ô¶³Ì·şÎñÆ÷'
+    }
+    if (node.type && node.type !== 'server') {
+      return '½ÚµãÄ£Ê½'
+    }
+    return '¶ÀÁ¢²¿Êğ'
+  }
+
+  function createButton() {
     const btn = document.createElement('div')
     btn.id = 'xb-relay-helper-btn'
-    Object.assign(btn.style, {position:'fixed', right:'16px', bottom:'16px', zIndex:2147483647})
+    Object.assign(btn.style, {
+      position: 'fixed',
+      right: '16px',
+      bottom: '16px',
+      zIndex: 2147483647,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '10px',
+      fontFamily: 'sans-serif',
+    })
 
-    const main = document.createElement('button')
-    main.textContent = 'å¿«é€Ÿæ·»åŠ ä¸­è½¬'
-    Object.assign(main.style, {padding:'10px 12px', background:'#0ea5e9', color:'#fff', border:'none', borderRadius:'8px', cursor:'pointer', boxShadow:'0 6px 18px rgba(0,0,0,0.12)'})
-    btn.appendChild(main)
-
-    const menu = document.createElement('div')
-    Object.assign(menu.style, {marginTop:'8px', display:'flex', flexDirection:'column'})
-    const tplBtn = document.createElement('button')
-    tplBtn.textContent = 'åè®®ç”»å»Š'
-    Object.assign(tplBtn.style, {padding:'8px 10px', marginBottom:'6px'})
-    const addBtn = document.createElement('button')
-    addBtn.textContent = 'ç²˜è´´åˆ›å»ºä¸­è½¬'
-    Object.assign(addBtn.style, {padding:'8px 10px', marginBottom:'6px'})
-    const testBtn = document.createElement('button')
-    testBtn.textContent = 'è¿é€šæ€§æµ‹è¯•'
-    Object.assign(testBtn.style, {padding:'8px 10px'})
-    menu.appendChild(tplBtn)
-    menu.appendChild(addBtn)
-    menu.appendChild(testBtn)
-    btn.appendChild(menu)
-    document.body.appendChild(btn)
-    main.addEventListener('click', onClick)
-    tplBtn.addEventListener('click', onTemplates)
-    addBtn.addEventListener('click', onClick)
-    testBtn.addEventListener('click', onTestRelay)
-  }
-
-  function onClick(){
-    const input = prompt('ç²˜è´´åˆ†äº«é“¾æ¥ï¼ˆæ”¯æŒ vless/vmess/trojan/ss/socks/httpï¼‰ï¼Œå°†ç”Ÿæˆå¯å¤åˆ¶çš„ custom_outbounds JSONï¼š')
-    if(!input) return
-    try{
-      // call backend generate-relay if available
-      const base = detectAdminBase()
-      generateRelayBackend(base, input.trim()).then(res => {
-        if(res && res.data){
-          const payload = res.data
-          showResult(JSON.stringify(payload, null, 2))
-          copyToClipboard(JSON.stringify(payload))
-          alert('å·²ç”Ÿæˆå¹¶å¤åˆ¶åˆ°å‰ªè´´æ¿ï¼Œç²˜è´´åˆ°é¢æ¿çš„â€œè‡ªå®šä¹‰ Outbounds / Custom Routesâ€å­—æ®µ')
-        } else {
-          const out = parseShareLink(input.trim())
-          showResult(JSON.stringify(out, null, 2))
-          copyToClipboard(JSON.stringify(out))
-          alert('å·²ç”Ÿæˆå¹¶å¤åˆ¶åˆ°å‰ªè´´æ¿ï¼Œç²˜è´´åˆ°é¢æ¿çš„â€œè‡ªå®šä¹‰ Outbounds (JSON)â€å­—æ®µ')
-        }
-      }).catch(err=>{
-        // fallback to client parse
-        const out = parseShareLink(input.trim())
-        showResult(JSON.stringify(out, null, 2))
-        copyToClipboard(JSON.stringify(out))
-        alert('å·²ç”Ÿæˆå¹¶å¤åˆ¶åˆ°å‰ªè´´æ¿ï¼Œç²˜è´´åˆ°é¢æ¿çš„â€œè‡ªå®šä¹‰ Outbounds (JSON)â€å­—æ®µ')
+    function makeAction(text, handler) {
+      const button = document.createElement('button')
+      button.textContent = text
+      Object.assign(button.style, {
+        padding: '10px 14px',
+        background: '#0f172a',
+        color: '#fff',
+        border: 'none',
+        borderRadius: '10px',
+        cursor: 'pointer',
+        fontSize: '13px',
       })
-    }catch(err){
-      alert('è§£æå¤±è´¥: '+err.message)
+      button.addEventListener('click', handler)
+      return button
     }
+
+    btn.appendChild(makeAction('¿ìËÙÌí¼ÓÖĞ×ª', openRelayPanel))
+    btn.appendChild(makeAction('Ğ­Òé»­ÀÈ', openTemplatePanel))
+    btn.appendChild(makeAction('Á¬Í¨ĞÔ²âÊÔ', openTestPanel))
+    btn.appendChild(makeAction('½Úµã¹ÜÀí', openNodePanel))
+    document.body.appendChild(btn)
   }
 
-  function onTemplates(){
-    const base = detectAdminBase()
-    fetchTemplatesBackend(base).then(res=>{
-      if(!res || !res.data){ alert('è·å–æ¨¡æ¿å¤±è´¥'); return }
-      const templates = res.data.templates || []
-      showTemplates(templates)
-    }).catch(err=>{ alert('è·å–æ¨¡æ¿å¤±è´¥: '+err) })
+  function createOverlay() {
+    const overlay = document.createElement('div')
+    overlay.id = 'xb-relay-helper-overlay'
+    Object.assign(overlay.style, {
+      position: 'fixed',
+      inset: '0',
+      zIndex: 2147483646,
+      backgroundColor: 'rgba(15, 23, 42, 0.55)',
+      display: 'none',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '20px',
+      overflowY: 'auto',
+    })
+
+    const panel = document.createElement('div')
+    Object.assign(panel.style, {
+      width: 'min(980px, calc(100% - 40px))',
+      maxHeight: '90vh',
+      background: '#ffffff',
+      borderRadius: '20px',
+      overflow: 'hidden',
+      boxShadow: '0 24px 80px rgba(15, 23, 42, 0.25)',
+      display: 'flex',
+      flexDirection: 'column',
+    })
+
+    const header = document.createElement('div')
+    Object.assign(header.style, {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      padding: '18px 22px',
+      borderBottom: '1px solid #e2e8f0',
+      background: '#f8fafc',
+    })
+    const title = document.createElement('div')
+    title.textContent = 'XBoard ÖĞ×ªÖúÊÖ'
+    Object.assign(title.style, { fontSize: '16px', fontWeight: '700' })
+    const close = document.createElement('button')
+    close.textContent = '¹Ø±Õ'
+    Object.assign(close.style, {
+      padding: '10px 14px',
+      border: 'none',
+      background: '#0f172a',
+      color: '#fff',
+      borderRadius: '10px',
+      cursor: 'pointer',
+    })
+    close.addEventListener('click', () => { overlay.style.display = 'none' })
+    header.appendChild(title)
+    header.appendChild(close)
+
+    const body = document.createElement('div')
+    Object.assign(body.style, {
+      display: 'flex',
+      flex: '1',
+      minHeight: '360px',
+    })
+
+    const sidebar = document.createElement('div')
+    Object.assign(sidebar.style, {
+      minWidth: '190px',
+      borderRight: '1px solid #e2e8f0',
+      padding: '18px',
+      background: '#f8fafc',
+    })
+
+    const tabs = [
+      { id: 'relay', label: 'ÖĞ×ªÉú³É' },
+      { id: 'template', label: 'Ğ­Òé»­ÀÈ' },
+      { id: 'test', label: 'Á¬Í¨²âÊÔ' },
+      { id: 'nodes', label: '½Úµã¹ÜÀí' },
+    ]
+
+    tabs.forEach((tab) => {
+      const item = document.createElement('button')
+      item.textContent = tab.label
+      item.dataset.tab = tab.id
+      Object.assign(item.style, {
+        width: '100%',
+        textAlign: 'left',
+        marginBottom: '10px',
+        padding: '10px 14px',
+        border: 'none',
+        borderRadius: '12px',
+        background: tab.id === STATE.currentTab ? '#0f172a' : '#ffffff',
+        color: tab.id === STATE.currentTab ? '#ffffff' : '#0f172a',
+        cursor: 'pointer',
+      })
+      item.addEventListener('click', () => switchTab(tab.id))
+      sidebar.appendChild(item)
+    })
+
+    const content = document.createElement('div')
+    content.id = 'xb-relay-helper-content'
+    Object.assign(content.style, {
+      flex: '1',
+      padding: '20px',
+      overflowY: 'auto',
+      background: '#ffffff',
+    })
+
+    panel.appendChild(header)
+    body.appendChild(sidebar)
+    body.appendChild(content)
+    panel.appendChild(body)
+    overlay.appendChild(panel)
+    document.body.appendChild(overlay)
+    return overlay
   }
 
-  function detectAdminBase(){
-    // Try to detect admin prefix from current pathname
-    const parts = window.location.pathname.split('/').filter(Boolean)
-    if(parts.length>0){
-      return '/' + parts[0]
-    }
-    return ''
+  function setActiveTabButton() {
+    const sidebar = document.querySelector('#xb-relay-helper-overlay div > div:nth-child(2)')
+    if (!sidebar) return
+    sidebar.querySelectorAll('button').forEach((button) => {
+      const tab = button.dataset.tab
+      const active = tab === STATE.currentTab
+      button.style.background = active ? '#0f172a' : '#ffffff'
+      button.style.color = active ? '#ffffff' : '#0f172a'
+    })
   }
 
-  function fetchTemplatesBackend(base){
-    const url = (base||'') + '/server/manage/template/generate-templates'
-    return fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})}).then(r=>r.json())
+  function switchTab(tabId) {
+    STATE.currentTab = tabId
+    setActiveTabButton()
+    renderContent()
   }
 
-  function generateRelayBackend(base, shareLink){
-    const url = (base||'') + '/server/manage/template/generate-relay'
-    const body = {share_link: shareLink, inbound_tag: 'vless-in'}
-    return fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)}).then(r=>r.json())
+  function createCard(title, description) {
+    const card = document.createElement('div')
+    Object.assign(card.style, {
+      border: '1px solid #e2e8f0',
+      borderRadius: '16px',
+      padding: '18px',
+      marginBottom: '16px',
+      background: '#f8fafc',
+    })
+    const h3 = document.createElement('div')
+    h3.textContent = title
+    Object.assign(h3.style, { fontWeight: 700, marginBottom: '10px' })
+    const desc = document.createElement('div')
+    desc.textContent = description
+    desc.style.color = '#475569'
+    card.appendChild(h3)
+    card.appendChild(desc)
+    return card
   }
 
-  function testRelayBackend(base, shareLink){
-    const url = (base||'') + '/server/manage/template/test-relay'
-    const body = {share_link: shareLink}
-    return fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)}).then(r=>r.json())
-  }
+  function renderRelayTab(container) {
+    container.appendChild(createCard('Ìí¼ÓÖĞ×ª', 'Õ³Ìù·ÖÏíÁ´½Ó£¬×Ô¶¯Ê¶±ğĞ­Òé²¢Éú³ÉÖĞ×ª³öÕ¾ÅäÖÃ¡£'))
+    const input = document.createElement('textarea')
+    input.placeholder = 'ÊäÈë share link£¬ÀıÈç vless://... »ò vmess://...'
+    Object.assign(input.style, {
+      width: '100%',
+      minHeight: '120px',
+      marginBottom: '12px',
+      padding: '14px',
+      borderRadius: '14px',
+      border: '1px solid #cbd5e1',
+      fontFamily: 'monospace',
+      fontSize: '14px',
+    })
 
-  function onTestRelay(){
-    const input = prompt('ç²˜è´´åˆ†äº«é“¾æ¥è¿›è¡Œè¿é€šæ€§æµ‹è¯•ï¼š')
-    if(!input) return
-    const base = detectAdminBase()
-    testRelayBackend(base, input.trim()).then(res => {
-      if(res && res.data){
-        showResult(JSON.stringify(res.data, null, 2))
-      } else {
-        showResult(JSON.stringify(res, null, 2))
+    const button = document.createElement('button')
+    button.textContent = 'Éú³ÉÖĞ×ªÅäÖÃ'
+    Object.assign(button.style, {
+      padding: '11px 16px',
+      borderRadius: '12px',
+      background: '#0ea5e9',
+      color: '#ffffff',
+      border: 'none',
+      cursor: 'pointer',
+      marginBottom: '12px',
+    })
+
+    const resultBox = document.createElement('pre')
+    Object.assign(resultBox.style, {
+      background: '#f8fafc',
+      border: '1px solid #e2e8f0',
+      borderRadius: '14px',
+      padding: '14px',
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+      maxHeight: '250px',
+      overflowY: 'auto',
+      marginTop: '12px',
+    })
+
+    const actions = document.createElement('div')
+    Object.assign(actions.style, { display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' })
+
+    const qrBtn = document.createElement('button')
+    qrBtn.textContent = 'Éú³É¶şÎ¬Âë'
+    Object.assign(qrBtn.style, {
+      padding: '10px 14px',
+      borderRadius: '12px',
+      background: '#14b8a6',
+      color: '#ffffff',
+      border: 'none',
+      cursor: 'pointer',
+    })
+
+    const testBtn = document.createElement('button')
+    testBtn.textContent = '²âÊÔÁ¬Í¨ĞÔ'
+    Object.assign(testBtn.style, {
+      padding: '10px 14px',
+      borderRadius: '12px',
+      background: '#2563eb',
+      color: '#ffffff',
+      border: 'none',
+      cursor: 'pointer',
+    })
+
+    const qrContainer = document.createElement('div')
+    Object.assign(qrContainer.style, {
+      marginTop: '16px',
+      display: 'flex',
+      justifyContent: 'flex-start',
+      alignItems: 'center',
+      gap: '14px',
+      flexWrap: 'wrap',
+    })
+
+    button.addEventListener('click', async () => {
+      const value = input.value.trim()
+      if (!value) {
+        alert('ÇëÏÈÊäÈë·ÖÏíÁ´½Ó')
+        return
       }
-    }).catch(err=>{ alert('è¿é€šæ€§æµ‹è¯•å¤±è´¥: '+err) })
-  }
-
-  function showTemplates(templates){
-    const wrap = document.createElement('div')
-    Object.assign(wrap.style, {position:'fixed', left:'50%', top:'50%', transform:'translate(-50%,-50%)', zIndex:2147483647, background:'#fff', border:'1px solid #e5e7eb', borderRadius:'8px', padding:'12px', width:'720px', maxHeight:'70vh', overflow:'auto', boxShadow:'0 8px 32px rgba(0,0,0,0.12)'})
-    templates.forEach(tpl=>{
-      const card = document.createElement('div')
-      card.style.borderBottom = '1px solid #eee'
-      card.style.padding = '8px'
-      const title = document.createElement('div')
-      title.textContent = tpl.name || tpl.protocol
-      title.style.fontWeight='600'
-      const notes = document.createElement('div')
-      notes.textContent = tpl.notes || ''
-      notes.style.fontSize='12px'
-      notes.style.color='#666'
-      const pre = document.createElement('pre')
-      pre.textContent = JSON.stringify(tpl.protocol_settings||{}, null, 2)
-      pre.style.background='#f7f7f7'
-      pre.style.padding='8px'
-      pre.style.borderRadius='6px'
-      const copy = document.createElement('button')
-      copy.textContent = 'å¤åˆ¶è®¾ç½®'
-      copy.style.marginRight='8px'
-      copy.onclick = ()=>{ copyToClipboard(JSON.stringify(tpl.protocol_settings||{})); alert('å·²å¤åˆ¶è®¾ç½® JSON') }
-      const open = document.createElement('button')
-      open.textContent = 'æ‰“å¼€èŠ‚ç‚¹åˆ›å»ºé¡µ'
-      open.onclick = ()=>{ window.open((detectAdminBase()||'') + '/server/manage') }
-      card.appendChild(title)
-      card.appendChild(notes)
-      card.appendChild(pre)
-      card.appendChild(copy)
-      card.appendChild(open)
-      wrap.appendChild(card)
+      resultBox.textContent = 'ÕıÔÚÉú³ÉÅäÖÃ¡­'
+      const base = detectAdminBase()
+      try {
+        const res = await generateRelay(base, value)
+        if (res && res.data) {
+          resultBox.textContent = JSON.stringify(res.data, null, 2)
+          await copyToClipboard(JSON.stringify(res.data, null, 2))
+        } else {
+          resultBox.textContent = JSON.stringify(res, null, 2)
+        }
+      } catch (err) {
+        resultBox.textContent = 'Éú³ÉÊ§°Ü£º' + ((err && err.message) || JSON.stringify(err))
+      }
     })
-    const close = document.createElement('button')
-    close.textContent = 'å…³é—­'
-    close.style.marginTop='8px'
-    close.onclick = ()=>{ document.body.removeChild(wrap) }
-    wrap.appendChild(close)
-    document.body.appendChild(wrap)
-  }
 
-  function showResult(text){
-    const wrap = document.createElement('div')
-    Object.assign(wrap.style, {
-      position:'fixed', left:'50%', top:'50%', transform:'translate(-50%,-50%)', zIndex:2147483647,
-      background:'#fff', border:'1px solid #e5e7eb', borderRadius:'8px', padding:'12px', width:'640px', maxHeight:'60vh', overflow:'auto', boxShadow:'0 8px 32px rgba(0,0,0,0.12)'
+    qrBtn.addEventListener('click', () => {
+      const value = input.value.trim()
+      if (!value) {
+        alert('ÇëÏÈÊäÈë·ÖÏíÁ´½Ó')
+        return
+      }
+      qrContainer.innerHTML = ''
+      const img = document.createElement('img')
+      img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=' + encodeURIComponent(value)
+      img.alt = 'QR Code'
+      Object.assign(img.style, { borderRadius: '16px', border: '1px solid #cbd5e1' })
+      qrContainer.appendChild(img)
     })
-    const ta = document.createElement('textarea')
-    ta.value = text
-    ta.style.width = '100%'
-    ta.style.height = '320px'
-    wrap.appendChild(ta)
-    const btns = document.createElement('div')
-    btns.style.marginTop = '8px'
-    const copy = document.createElement('button')
-    copy.textContent = 'å¤åˆ¶'
-    Object.assign(copy.style,{marginRight:'8px',padding:'6px 10px'})
-    copy.onclick = ()=>{ copyToClipboard(ta.value).then(()=>alert('å·²å¤åˆ¶')) }
-    const close = document.createElement('button')
-    close.textContent = 'å…³é—­'
-    Object.assign(close.style,{padding:'6px 10px'})
-    close.onclick = ()=>{ document.body.removeChild(wrap) }
-    btns.appendChild(copy)
-    btns.appendChild(close)
-    wrap.appendChild(btns)
-    document.body.appendChild(wrap)
-    ta.select()
+
+    testBtn.addEventListener('click', async () => {
+      const value = input.value.trim()
+      if (!value) {
+        alert('ÇëÏÈÊäÈë·ÖÏíÁ´½Ó')
+        return
+      }
+      resultBox.textContent = 'ÕıÔÚ²âÊÔÁ¬Í¨ĞÔ¡­'
+      const base = detectAdminBase()
+      try {
+        const res = await testRelay(base, value)
+        if (res && res.data) {
+          resultBox.textContent = JSON.stringify(res.data, null, 2)
+        } else {
+          resultBox.textContent = JSON.stringify(res, null, 2)
+        }
+      } catch (err) {
+        resultBox.textContent = '²âÊÔÊ§°Ü£º' + ((err && err.message) || JSON.stringify(err))
+      }
+    })
+
+    const hint = document.createElement('div')
+    hint.textContent = 'ÌáÊ¾£º½á¹û»á¸´ÖÆµ½¼ôÌù°å£¬¿ÉÖ±½ÓÕ³Ìùµ½×Ô¶¨Òå Outbounds / Custom Routes¡£'
+    hint.style.color = '#475569'
+    hint.style.marginTop = '8px'
+
+    container.appendChild(input)
+    container.appendChild(button)
+    actions.appendChild(qrBtn)
+    actions.appendChild(testBtn)
+    container.appendChild(actions)
+    container.appendChild(hint)
+    container.appendChild(resultBox)
+    container.appendChild(qrContainer)
   }
 
-  function copyToClipboard(text){
-    if(navigator.clipboard && navigator.clipboard.writeText){
+  function renderTemplateTab(container) {
+    container.appendChild(createCard('Ğ­Òé»­ÀÈ', '¿ìËÙä¯ÀÀ²¢¸´ÖÆÔ¤ÖÃÖĞ×ªÄ£°å¡£'))
+    const button = document.createElement('button')
+    button.textContent = '¼ÓÔØĞ­Òé»­ÀÈ'
+    Object.assign(button.style, {
+      padding: '11px 16px',
+      borderRadius: '12px',
+      background: '#0ea5e9',
+      color: '#ffffff',
+      border: 'none',
+      cursor: 'pointer',
+      marginBottom: '16px',
+    })
+    const list = document.createElement('div')
+    Object.assign(list.style, {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+      gap: '14px',
+    })
+
+    button.addEventListener('click', async () => {
+      list.innerHTML = 'ÕıÔÚ¼ÓÔØ¡­'
+      const base = detectAdminBase()
+      try {
+        const res = await fetchTemplates(base)
+        if (res && res.data && Array.isArray(res.data.templates)) {
+          list.innerHTML = ''
+          res.data.templates.forEach((tpl) => {
+            const card = document.createElement('div')
+            Object.assign(card.style, {
+              background: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: '16px',
+              padding: '16px',
+            })
+            const title = document.createElement('div')
+            title.textContent = tpl.name || tpl.protocol
+            title.style.fontWeight = '700'
+            title.style.marginBottom = '8px'
+            const notes = document.createElement('div')
+            notes.textContent = tpl.notes || ''
+            notes.style.color = '#475569'
+            notes.style.marginBottom = '12px'
+            const pre = document.createElement('pre')
+            pre.textContent = JSON.stringify(tpl.protocol_settings || {}, null, 2)
+            Object.assign(pre.style, {
+              background: '#ffffff',
+              border: '1px solid #e2e8f0',
+              borderRadius: '12px',
+              padding: '12px',
+              maxHeight: '220px',
+              overflowY: 'auto',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+            })
+            const copy = document.createElement('button')
+            copy.textContent = '¸´ÖÆÉèÖÃ'
+            Object.assign(copy.style, {
+              marginTop: '8px',
+              padding: '10px 14px',
+              borderRadius: '12px',
+              background: '#14b8a6',
+              color: '#ffffff',
+              border: 'none',
+              cursor: 'pointer',
+            })
+            copy.addEventListener('click', async () => {
+              await copyToClipboard(JSON.stringify(tpl.protocol_settings || {}, null, 2))
+              alert('ÒÑ¸´ÖÆÉèÖÃ')
+            })
+            card.appendChild(title)
+            card.appendChild(notes)
+            card.appendChild(pre)
+            card.appendChild(copy)
+            list.appendChild(card)
+          })
+        } else {
+          list.textContent = 'ÎŞ¿ÉÓÃÄ£°å'
+        }
+      } catch (err) {
+        list.textContent = '¼ÓÔØÊ§°Ü£º' + ((err && err.message) || JSON.stringify(err))
+      }
+    })
+
+    container.appendChild(button)
+    container.appendChild(list)
+  }
+
+  function renderTestTab(container) {
+    container.appendChild(createCard('Á¬Í¨ĞÔ²âÊÔ', 'Ö±½Ó¼ì²é·ÖÏíÁ´½ÓÄ¿±êµØÖ·ÊÇ·ñ¿É´ï¡£'))
+    const input = document.createElement('textarea')
+    input.placeholder = 'ÊäÈëÒª²âÊÔµÄ·ÖÏíÁ´½Ó'
+    Object.assign(input.style, {
+      width: '100%',
+      minHeight: '120px',
+      marginBottom: '12px',
+      padding: '14px',
+      borderRadius: '14px',
+      border: '1px solid #cbd5e1',
+      fontFamily: 'monospace',
+      fontSize: '14px',
+    })
+    const button = document.createElement('button')
+    button.textContent = '¿ªÊ¼²âÊÔ'
+    Object.assign(button.style, {
+      padding: '11px 16px',
+      borderRadius: '12px',
+      background: '#0ea5e9',
+      color: '#ffffff',
+      border: 'none',
+      cursor: 'pointer',
+      marginBottom: '12px',
+    })
+    const result = document.createElement('pre')
+    Object.assign(result.style, {
+      background: '#f8fafc',
+      border: '1px solid #e2e8f0',
+      borderRadius: '14px',
+      padding: '14px',
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+      maxHeight: '280px',
+      overflowY: 'auto',
+    })
+    button.addEventListener('click', async () => {
+      const value = input.value.trim()
+      if (!value) {
+        alert('ÇëÏÈÊäÈë·ÖÏíÁ´½Ó')
+        return
+      }
+      result.textContent = 'ÕıÔÚ²âÊÔ¡­'
+      const base = detectAdminBase()
+      try {
+        const res = await testRelay(base, value)
+        if (res && res.data) {
+          result.textContent = JSON.stringify(res.data, null, 2)
+        } else {
+          result.textContent = JSON.stringify(res, null, 2)
+        }
+      } catch (err) {
+        result.textContent = '²âÊÔÊ§°Ü£º' + ((err && err.message) || JSON.stringify(err))
+      }
+    })
+    container.appendChild(input)
+    container.appendChild(button)
+    container.appendChild(result)
+  }
+
+  function renderNodeTab(container) {
+    container.appendChild(createCard('½Úµã¹ÜÀí', 'ÏÔÊ¾¶à·şÎñÆ÷ÁĞ±í£¬ÀëÏß·şÎñÆ÷²»¿ÉÑ¡£¬²¢Ö§³ÖÅúÁ¿É¾³ı¡£'))
+    const loadBtn = document.createElement('button')
+    loadBtn.textContent = '¼ÓÔØ½ÚµãÁĞ±í'
+    Object.assign(loadBtn.style, {
+      padding: '11px 16px',
+      borderRadius: '12px',
+      background: '#0ea5e9',
+      color: '#ffffff',
+      border: 'none',
+      cursor: 'pointer',
+      marginBottom: '12px',
+    })
+    const tableWrap = document.createElement('div')
+    Object.assign(tableWrap.style, {
+      maxHeight: '420px',
+      overflowY: 'auto',
+      border: '1px solid #cbd5e1',
+      borderRadius: '16px',
+    })
+    const table = document.createElement('table')
+    Object.assign(table.style, {
+      width: '100%',
+      borderCollapse: 'collapse',
+      minWidth: '720px',
+    })
+    const thead = document.createElement('thead')
+    thead.innerHTML = '<tr><th style="padding:12px;border-bottom:1px solid #e2e8f0;text-align:left;">Ñ¡Ôñ</th><th style="padding:12px;border-bottom:1px solid #e2e8f0;text-align:left;">·şÎñÆ÷</th><th style="padding:12px;border-bottom:1px solid #e2e8f0;text-align:left;">×´Ì¬</th><th style="padding:12px;border-bottom:1px solid #e2e8f0;text-align:left;">À´Ô´</th><th style="padding:12px;border-bottom:1px solid #e2e8f0;text-align:left;">»úÆ÷ID</th></tr>'
+    const tbody = document.createElement('tbody')
+    table.appendChild(thead)
+    table.appendChild(tbody)
+    tableWrap.appendChild(table)
+
+    const actions = document.createElement('div')
+    Object.assign(actions.style, { display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '12px' })
+    const selectedLabel = document.createElement('div')
+    selectedLabel.textContent = 'ÒÑÑ¡ 0 ¸ö½Úµã'
+    selectedLabel.style.alignSelf = 'center'
+    const deleteBtn = document.createElement('button')
+    deleteBtn.textContent = 'ÅúÁ¿É¾³ıÑ¡ÖĞ½Úµã'
+    Object.assign(deleteBtn.style, {
+      padding: '10px 14px',
+      borderRadius: '12px',
+      background: '#ef4444',
+      color: '#ffffff',
+      border: 'none',
+      cursor: 'pointer',
+    })
+    deleteBtn.disabled = true
+    deleteBtn.addEventListener('click', async () => {
+      const ids = Array.from(STATE.selectedNodeIds)
+      if (ids.length === 0) {
+        alert('ÇëÏÈÑ¡ÔñÒªÉ¾³ıµÄ½Úµã')
+        return
+      }
+      if (!confirm(`È·ÈÏÉ¾³ı ${ids.length} ¸ö½Úµã£¿´Ë²Ù×÷²»¿É»Ö¸´¡£`)) return
+      const base = detectAdminBase()
+      try {
+        const res = await batchDelete(base, ids)
+        if (res && res.data) {
+          alert('ÅúÁ¿É¾³ı³É¹¦')
+          await loadNodes(base)
+          renderNodeTable(tbody, selectedLabel, deleteBtn)
+        } else {
+          alert('ÅúÁ¿É¾³ıÊ§°Ü')
+        }
+      } catch (err) {
+        alert('ÅúÁ¿É¾³ıÊ§°Ü£º' + ((err && err.message) || JSON.stringify(err)))
+      }
+    })
+    actions.appendChild(selectedLabel)
+    actions.appendChild(deleteBtn)
+
+    loadBtn.addEventListener('click', async () => {
+      loadBtn.textContent = '¼ÓÔØÖĞ¡­'
+      loadBtn.disabled = true
+      const base = detectAdminBase()
+      try {
+        await loadNodes(base)
+        renderNodeTable(tbody, selectedLabel, deleteBtn)
+      } catch (err) {
+        tbody.innerHTML = '<tr><td colspan="5" style="padding:14px;color:#dc2626;">¼ÓÔØ½ÚµãÊ§°Ü</td></tr>'
+      } finally {
+        loadBtn.textContent = '¼ÓÔØ½ÚµãÁĞ±í'
+        loadBtn.disabled = false
+      }
+    })
+
+    container.appendChild(loadBtn)
+    container.appendChild(tableWrap)
+    container.appendChild(actions)
+  }
+
+  function renderNodeTable(tbody, selectedLabel, deleteBtn) {
+    tbody.innerHTML = ''
+    STATE.selectedNodeIds.clear()
+    if (!Array.isArray(STATE.nodes) || STATE.nodes.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" style="padding:14px;">ÔİÎŞ½ÚµãÊı¾İ£¬ÇëÏÈ¼ÓÔØ¡£</td></tr>'
+      selectedLabel.textContent = 'ÒÑÑ¡ 0 ¸ö½Úµã'
+      deleteBtn.disabled = true
+      return
+    }
+    STATE.nodes.forEach((node) => {
+      const offline = isOffline(node)
+      const row = document.createElement('tr')
+      row.style.background = offline ? '#f8fafc' : '#ffffff'
+      row.style.color = offline ? '#94a3b8' : '#0f172a'
+      row.innerHTML = `
+        <td style="padding:12px;border-bottom:1px solid #e2e8f0;vertical-align:middle;"></td>
+        <td style="padding:12px;border-bottom:1px solid #e2e8f0;vertical-align:middle;">${escapeHtml(node.name || node.title || node.server_name || 'Unnamed')}</td>
+        <td style="padding:12px;border-bottom:1px solid #e2e8f0;vertical-align:middle;">${offline ? 'ÀëÏß' : 'ÔÚÏß'}</td>
+        <td style="padding:12px;border-bottom:1px solid #e2e8f0;vertical-align:middle;">${escapeHtml(getSourceLabel(node))}</td>
+        <td style="padding:12px;border-bottom:1px solid #e2e8f0;vertical-align:middle;">${escapeHtml(node.machine_id ? node.machine_id.toString() : 'ÎŞ')}</td>
+      `
+      const checkboxTd = row.querySelector('td')
+      const checkbox = document.createElement('input')
+      checkbox.type = 'checkbox'
+      checkbox.disabled = offline
+      checkbox.style.transform = 'scale(1.2)'
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) {
+          STATE.selectedNodeIds.add(node.id)
+        } else {
+          STATE.selectedNodeIds.delete(node.id)
+        }
+        selectedLabel.textContent = `ÒÑÑ¡ ${STATE.selectedNodeIds.size} ¸ö½Úµã`
+        deleteBtn.disabled = STATE.selectedNodeIds.size === 0
+      })
+      checkboxTd.appendChild(checkbox)
+      tbody.appendChild(row)
+    })
+    selectedLabel.textContent = 'ÒÑÑ¡ 0 ¸ö½Úµã'
+    deleteBtn.disabled = true
+  }
+
+  function escapeHtml(value) {
+    if (typeof value !== 'string') return String(value)
+    return value.replace(/[&<>\"]/g, function (tag) {
+      const chars = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+      }
+      return chars[tag] || tag
+    })
+  }
+
+  function copyToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
       return navigator.clipboard.writeText(text)
     }
-    return new Promise((res, rej)=>{
+    return new Promise((resolve, reject) => {
       const ta = document.createElement('textarea')
       ta.value = text
       document.body.appendChild(ta)
       ta.select()
-      try{ document.execCommand('copy'); document.body.removeChild(ta); res() }catch(e){ document.body.removeChild(ta); rej(e) }
+      try {
+        document.execCommand('copy')
+        document.body.removeChild(ta)
+        resolve()
+      } catch (err) {
+        document.body.removeChild(ta)
+        reject(err)
+      }
     })
   }
 
-  function parseShareLink(input){
-    const lower = input.toLowerCase()
-    if(lower.startsWith('vmess://')){
-      const raw = input.slice(8)
-      const decoded = tryBase64Decode(raw)
-      const obj = JSON.parse(decoded)
-      const address = obj.add || obj.address
-      const port = parseInt(obj.port||obj.port||0)
-      const id = obj.id || obj.uuid || obj.uid
-      return {protocol:'vmess', tag: 'relay-'+Date.now(), settings:{vnext:[{address,port,users:[{id}] }]}}
-    }
-    if(lower.startsWith('vless://')){
-      const u = new URL(input)
-      const id = u.username
-      const [host,port] = u.host.split(':')
-      return {protocol:'vless', tag:'relay-'+Date.now(), settings:{vnext:[{address:host,port:parseInt(port),users:[{id}]}]}}
-    }
-    if(lower.startsWith('trojan://')){
-      const u = new URL(input)
-      const pw = u.password
-      const [host,port] = u.host.split(':')
-      return {protocol:'trojan', tag:'relay-'+Date.now(), settings:{servers:[{address:host,port:parseInt(port),password:pw}]}}
-    }
-    if(lower.startsWith('ss://') || lower.startsWith('shadowsocks://')){
-      let raw = input.replace(/^ss:|^shadowsocks:/i,'')
-      raw = raw.replace(/^\/\//,'')
-      // try method:pass@host:port or base64 payload
-      if(raw.includes('@')){
-        const [up,hostpart] = raw.split('@')
-        const [method,password] = up.split(':')
-        const [host,port] = hostpart.split(':')
-        return {protocol:'shadowsocks', tag:'relay-'+Date.now(), settings:{servers:[{address:host,port:parseInt(port),method,password}]}}
-      }
-      // base64 case
-      const decoded = tryBase64Decode(raw)
-      if(decoded){
-        const idx = decoded.indexOf('@')
-        if(idx>0){
-          const up = decoded.slice(0,idx)
-          const hostpart = decoded.slice(idx+1)
-          const [method,password] = up.split(':')
-          const [host,port] = hostpart.split(':')
-          return {protocol:'shadowsocks', tag:'relay-'+Date.now(), settings:{servers:[{address:host,port:parseInt(port),method,password}]}}
-        }
-      }
-      throw new Error('æ— æ³•è§£æ shadowsocks é“¾æ¥')
-    }
-    if(lower.startsWith('socks://')||lower.startsWith('http://')){
-      const u = new URL(input)
-      const user = u.username
-      const pass = u.password
-      const [host,port] = u.host.split(':')
-      const server = {address:host,port:parseInt(port)}
-      if(user||pass) server.users=[{user,pass}]
-      return {protocol: u.protocol.replace(':',''), tag:'relay-'+Date.now(), settings:{servers:[server]}}
-    }
-    throw new Error('ä¸æ”¯æŒçš„åˆ†äº«é“¾æ¥åè®®')
+  function openRelayPanel() {
+    showOverlay('relay')
   }
 
-  function tryBase64Decode(s){
-    try{
-      // normalize padding
-      let t = s.replace(/[-_]/g,'+')
-      while(t.length%4) t += '='
-      return atob(t)
-    }catch(e){
-      try{ return atob(s) }catch(err){ return null }
+  function openTemplatePanel() {
+    showOverlay('template')
+  }
+
+  function openTestPanel() {
+    showOverlay('test')
+  }
+
+  function openNodePanel() {
+    showOverlay('nodes')
+  }
+
+  function showOverlay(tab) {
+    const overlay = document.getElementById('xb-relay-helper-overlay')
+    if (!overlay) return
+    overlay.style.display = 'flex'
+    STATE.currentTab = tab
+    setActiveTabButton()
+    renderContent()
+  }
+
+  const overlay = createOverlay()
+  createButton()
+  document.addEventListener('DOMContentLoaded', () => {
+    overlay.style.display = 'none'
+  })
+
+  function renderContent() {
+    const content = document.getElementById('xb-relay-helper-content')
+    if (!content) return
+    content.innerHTML = ''
+    if (STATE.currentTab === 'relay') {
+      renderRelayTab(content)
+    } else if (STATE.currentTab === 'template') {
+      renderTemplateTab(content)
+    } else if (STATE.currentTab === 'test') {
+      renderTestTab(content)
+    } else if (STATE.currentTab === 'nodes') {
+      renderNodeTab(content)
     }
   }
 
-  // delayed init to ensure page DOM exists
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', createButton)
-  else createButton()
-})();
+  window.addEventListener('load', () => {
+    const overlayEl = document.getElementById('xb-relay-helper-overlay')
+    if (overlayEl) {
+      overlayEl.style.display = 'none'
+    }
+  })
+})()

@@ -81,6 +81,7 @@
 
 <body>
   <div id="root"></div>
+  <script src="/assets/admin/assets/xb-relay-helper.js"></script>
 </body>
 
 </html>
