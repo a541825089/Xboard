@@ -94,9 +94,11 @@ class AdminRoute
                 $router->post('/resetTraffic', [ManageController::class, 'resetTraffic']);
                 $router->post('/batchResetTraffic', [ManageController::class, 'batchResetTraffic']);
                 $router->get('/generateEchKey', [ManageController::class, 'generateEchKey']);
+                // Template generator
+                $router->post('/template/generate-relay', [\App\Http\Controllers\V2\Admin\TemplateController::class, 'generateRelay']);
+                $router->post('/template/generate-templates', [\App\Http\Controllers\V2\Admin\TemplateController::class, 'generateTemplates']);
+                $router->post('/template/test-relay', [\App\Http\Controllers\V2\Admin\TemplateController::class, 'testRelay']);
             });
-
-            // 机器管理接口
             $router->group([
                 'prefix' => 'server/machine'
             ], function ($router) {
