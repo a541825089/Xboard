@@ -8,7 +8,12 @@
 /storage/*.key
 /vendor
 .env
-.env.backup
+.env.*
+!.env.example
+*.backup
+*.backup-*
+*.gbk-backup-*
+*.utf8-backup-*
 .phpunit.result.cache
 .idea
 Homestead.json
