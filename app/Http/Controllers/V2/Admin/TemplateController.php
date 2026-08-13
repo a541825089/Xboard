@@ -3,10 +3,252 @@
 namespace App\Http\Controllers\V2\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Server;
+use App\Models\ServerGroup;
+use App\Models\ServerMachine;
+use App\Protocols\General;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class TemplateController extends Controller
 {
+    public function createSocksRealityRelay(Request $request)
+    {
+        $params = $request->validate([
+            'socks_host' => 'required|string|max:255',
+            'socks_port' => 'required|integer|min:1|max:65535',
+            'socks_username' => 'nullable|string|max:255',
+            'socks_password' => 'nullable|string|max:255',
+            'machine_id' => 'required|integer|exists:v2_server_machine,id',
+            'node_host' => 'required|string|max:255',
+            'group_ids' => 'required|array|min:1',
+            'group_ids.*' => 'integer|exists:v2_server_group,id',
+            'name' => 'nullable|string|max:255',
+            'server_name' => 'nullable|string|max:255',
+        ]);
+
+        $machine = ServerMachine::findOrFail((int) $params['machine_id']);
+        if (!$machine->is_active) {
+            return $this->fail([422, '所选运行机器未启用']);
+        }
+
+        try {
+            $probe = $this->probeSocks5(
+                trim($params['socks_host']),
+                (int) $params['socks_port'],
+                (string) ($params['socks_username'] ?? ''),
+                (string) ($params['socks_password'] ?? '')
+            );
+        } catch (\Throwable $e) {
+            return $this->fail([422, 'SOCKS5 检测失败'], null, $e->getMessage());
+        }
+
+        try {
+            [$privateKey, $publicKey] = $this->generateRealityKeyPair();
+            $shortId = bin2hex(random_bytes(8));
+            $port = $this->findAvailablePort((int) $params['machine_id'], trim($params['node_host']));
+            $serverName = trim((string) ($params['server_name'] ?? '')) ?: 'www.cloudflare.com';
+            $nodeName = trim((string) ($params['name'] ?? '')) ?: 'VLESS Reality 高速中转';
+
+            $node = DB::transaction(function () use ($params, $port, $serverName, $nodeName, $privateKey, $publicKey, $shortId) {
+                $node = new Server();
+                $node->type = Server::TYPE_VLESS;
+                $node->name = $nodeName;
+                $node->host = trim($params['node_host']);
+                $node->port = (string) $port;
+                $node->server_port = $port;
+                $node->rate = 1;
+                $node->show = true;
+                $node->enabled = true;
+                $node->machine_id = (int) $params['machine_id'];
+                $node->group_ids = array_map('strval', array_values(array_unique($params['group_ids'])));
+                $node->route_ids = [];
+                $node->tags = ['vless', 'reality', 'relay'];
+                $node->protocol_settings = [
+                    'tls' => 2,
+                    'network' => 'tcp',
+                    'flow' => 'xtls-rprx-vision',
+                    'tls_settings' => ['server_name' => null, 'allow_insecure' => false],
+                    'reality_settings' => [
+                        'server_name' => $serverName,
+                        'server_port' => 443,
+                        'public_key' => $publicKey,
+                        'private_key' => $privateKey,
+                        'short_id' => $shortId,
+                        'allow_insecure' => false,
+                    ],
+                    'multiplex' => ['enabled' => false],
+                    'utls' => ['enabled' => true, 'fingerprint' => 'chrome'],
+                ];
+                $node->custom_outbounds = [[
+                    'tag' => 'direct',
+                    'protocol' => 'socks',
+                    'settings' => [
+                        'server' => trim($params['socks_host']),
+                        'server_port' => (int) $params['socks_port'],
+                        'username' => (string) ($params['socks_username'] ?? ''),
+                        'password' => (string) ($params['socks_password'] ?? ''),
+                        'version' => '5',
+                    ],
+                ]];
+                // sing-box uses the outbound tagged "direct" as its final route.
+                // Xray-style inboundTag/outboundTag rules must not be generated here.
+                $node->custom_routes = [];
+                $node->save();
+                return $node;
+            });
+
+            $subscription = General::buildVless('00000000-0000-4000-8000-000000000000', array_merge(
+                $node->toArray(),
+                ['password' => '00000000-0000-4000-8000-000000000000']
+            ));
+            $secrets = [
+                trim($params['socks_host']),
+                (string) ($params['socks_username'] ?? ''),
+                (string) ($params['socks_password'] ?? ''),
+                'socks',
+            ];
+            foreach ($secrets as $secret) {
+                if ($secret !== '' && stripos($subscription, $secret) !== false) {
+                    $node->delete();
+                    throw new \RuntimeException('订阅安全检查未通过，节点已回滚');
+                }
+            }
+
+            return $this->success([
+                'node_id' => $node->id,
+                'name' => $node->name,
+                'protocol' => 'vless',
+                'security' => 'reality',
+                'host' => $node->host,
+                'port' => $port,
+                'machine_id' => $node->machine_id,
+                'exit_ip' => $probe['exit_ip'],
+                'socks5_check' => 'passed',
+                'subscription_check' => 'passed',
+            ]);
+        } catch (\Throwable $e) {
+            return $this->fail([500, '创建中转节点失败'], null, $e->getMessage());
+        }
+    }
+
+    private function generateRealityKeyPair(): array
+    {
+        if (!function_exists('sodium_crypto_box_keypair')) {
+            throw new \RuntimeException('服务器缺少 Sodium 扩展，无法生成 Reality 密钥');
+        }
+        $pair = sodium_crypto_box_keypair();
+        return [
+            $this->base64UrlEncode(sodium_crypto_box_secretkey($pair)),
+            $this->base64UrlEncode(sodium_crypto_box_publickey($pair)),
+        ];
+    }
+
+    private function base64UrlEncode(string $value): string
+    {
+        return rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
+    }
+
+    private function findAvailablePort(int $machineId, string $nodeHost): int
+    {
+        $used = Server::where('machine_id', $machineId)
+            ->pluck('server_port')
+            ->map(fn ($port) => (int) $port)
+            ->flip();
+        $candidates = array_merge([443, 8443, 9443, 2443, 3443, 4443], range(20000, 20100));
+        foreach ($candidates as $port) {
+            if ($used->has($port)) {
+                continue;
+            }
+            $socket = @stream_socket_client("tcp://{$nodeHost}:{$port}", $errno, $errstr, 0.35);
+            if (is_resource($socket)) {
+                fclose($socket);
+                continue;
+            }
+            return $port;
+        }
+        throw new \RuntimeException('没有找到可用的节点端口');
+    }
+
+    private function probeSocks5(string $host, int $port, string $username, string $password): array
+    {
+        $socket = @stream_socket_client("tcp://{$host}:{$port}", $errno, $errstr, 8);
+        if (!is_resource($socket)) {
+            throw new \RuntimeException(trim($errstr ?: "无法连接 {$host}:{$port}"));
+        }
+        stream_set_timeout($socket, 10);
+        try {
+            $methods = ($username !== '' || $password !== '') ? "\x00\x02" : "\x00";
+            $this->socketWrite($socket, "\x05" . chr(strlen($methods)) . $methods);
+            $reply = $this->socketRead($socket, 2);
+            if (ord($reply[0]) !== 5 || ord($reply[1]) === 255) {
+                throw new \RuntimeException('SOCKS5 协议协商失败');
+            }
+            if (ord($reply[1]) === 2) {
+                if (strlen($username) > 255 || strlen($password) > 255) {
+                    throw new \RuntimeException('SOCKS5 账号或密码过长');
+                }
+                $this->socketWrite($socket, "\x01" . chr(strlen($username)) . $username . chr(strlen($password)) . $password);
+                $auth = $this->socketRead($socket, 2);
+                if (ord($auth[1]) !== 0) {
+                    throw new \RuntimeException('SOCKS5 账号或密码错误');
+                }
+            } elseif (ord($reply[1]) !== 0) {
+                throw new \RuntimeException('SOCKS5 认证方式不受支持');
+            }
+
+            $target = 'api.ipify.org';
+            $this->socketWrite($socket, "\x05\x01\x00\x03" . chr(strlen($target)) . $target . pack('n', 80));
+            $header = $this->socketRead($socket, 4);
+            if (ord($header[1]) !== 0) {
+                throw new \RuntimeException('SOCKS5 无法建立出口连接，错误码 ' . ord($header[1]));
+            }
+            $addressLength = match (ord($header[3])) {
+                1 => 4,
+                3 => ord($this->socketRead($socket, 1)),
+                4 => 16,
+                default => throw new \RuntimeException('SOCKS5 返回了未知地址类型'),
+            };
+            $this->socketRead($socket, $addressLength + 2);
+            $this->socketWrite($socket, "GET /?format=text HTTP/1.1\r\nHost: api.ipify.org\r\nConnection: close\r\n\r\n");
+            $response = '';
+            while (!feof($socket) && strlen($response) < 65536) {
+                $chunk = fread($socket, 8192);
+                if ($chunk === false) break;
+                $response .= $chunk;
+            }
+            [$headers, $body] = array_pad(preg_split("/\r?\n\r?\n/", $response, 2), 2, '');
+            $exitIp = trim($body);
+            if (!str_contains($headers, ' 200 ') || filter_var($exitIp, FILTER_VALIDATE_IP) === false) {
+                throw new \RuntimeException('已连接 SOCKS5，但无法确认出口 IP');
+            }
+            return ['exit_ip' => $exitIp];
+        } finally {
+            fclose($socket);
+        }
+    }
+
+    private function socketWrite($socket, string $data): void
+    {
+        $written = 0;
+        while ($written < strlen($data)) {
+            $count = fwrite($socket, substr($data, $written));
+            if ($count === false || $count === 0) throw new \RuntimeException('SOCKS5 写入失败');
+            $written += $count;
+        }
+    }
+
+    private function socketRead($socket, int $length): string
+    {
+        $data = '';
+        while (strlen($data) < $length) {
+            $chunk = fread($socket, $length - strlen($data));
+            if ($chunk === false || $chunk === '') throw new \RuntimeException('SOCKS5 响应不完整');
+            $data .= $chunk;
+        }
+        return $data;
+    }
+
     public function generateRelay(Request $request)
     {
         $params = $request->validate([
@@ -264,3 +506,4 @@ class TemplateController extends Controller
         return $decoded;
     }
 }
+
