@@ -1,106 +1,152 @@
-# Xboard
+# Xboard（定制中转版）
 
-<div align="center">
+本仓库是配合 [`a541825089/Xboard-Node`](https://github.com/a541825089/Xboard-Node) 使用的 Xboard 定制版本。生产部署已经在 Ubuntu 服务器、Docker Compose、Traefik HTTPS 反向代理环境中验证。
 
-[![Telegram](https://img.shields.io/badge/Telegram-Channel-blue)](https://t.me/XboardOfficial)
-![PHP](https://img.shields.io/badge/PHP-8.2+-green.svg)
-![MySQL](https://img.shields.io/badge/MySQL-5.7+-blue.svg)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+## 定制功能
 
-</div>
+- 节点管理页集成“XBoard 中转助手”统一入口；
+- 一键输入 SOCKS5 地址、端口、账号和密码；
+- 创建前检测 SOCKS5 连通性及出口 IP；
+- 自动选择空闲端口、生成 Reality 密钥并创建 VLESS + Reality 节点；
+- sing-box 自定义出站固定使用 `tag: direct`，不生成不兼容的自定义路由；
+- SOCKS5 上游信息只保存在节点服务端配置，不进入用户订阅；
+- 服务器 Token 安装命令从自有 Xboard-Node 仓库拉取源码并现场编译。
 
-## 📖 Introduction
+## 已验证的生产结构
 
-Xboard is a modern panel system built on Laravel 11, focusing on providing a clean and efficient user experience.
+- 系统：Ubuntu 24.04 LTS
+- 项目目录：`/opt/xboard`
+- 应用容器：`xboard-xboard-1`
+- 应用镜像：由本仓库源码本地构建
+- HTTPS：Traefik 负责 TLS 与反向代理
+- Xboard-Node：机器模式、sing-box 内核、systemd 服务
 
-## ✨ Features
+域名、管理员路径、数据库密码、机器 Token 和证书均属于部署机私密配置，不应提交到 Git。
 
-- 🚀 Built with Laravel 12 + Octane for significant performance gains
-- 🎨 Redesigned admin interface (React + Shadcn UI)
-- 📱 Modern user frontend (Vue3 + TypeScript)
-- 🐳 Ready-to-use Docker deployment solution
-- 🎯 Optimized system architecture for better maintainability
+## Docker Compose 部署
 
-## 🚀 Quick Start
+### 1. 准备源码
 
 ```bash
-git clone -b compose --depth 1 https://github.com/cedar2025/Xboard && \
-cd Xboard && \
-docker compose run -it --rm \
-    -e ENABLE_SQLITE=true \
-    -e ENABLE_REDIS=true \
-    -e ADMIN_ACCOUNT=admin@demo.com \
-    xboard php artisan xboard:install && \
-docker compose up -d
+sudo install -d -m 755 /opt/xboard
+sudo git clone https://github.com/a541825089/Xboard.git /opt/xboard
+cd /opt/xboard
 ```
 
-> After installation, visit: http://SERVER_IP:7001  
-> ⚠️ Make sure to save the admin credentials shown during installation
+### 2. 创建环境配置
 
-## 📖 Documentation
-
-### 🔄 Upgrade Notice
-> 🚨 **Important:** This version involves significant changes. Please strictly follow the upgrade documentation and backup your database before upgrading. Note that upgrading and migration are different processes, do not confuse them.
-
-### Development Guides
-- [Plugin Development Guide](./docs/en/development/plugin-development-guide.md) - Complete guide for developing XBoard plugins
-
-### Deployment Guides
-- [Deploy with 1Panel](./docs/en/installation/1panel.md)
-- [Deploy with Docker Compose](./docs/en/installation/docker-compose.md)
-- [Deploy with aaPanel](./docs/en/installation/aapanel.md)
-- [Deploy with aaPanel + Docker](./docs/en/installation/aapanel-docker.md) (Recommended)
-
-### Migration Guides
-- [Migrate from v2board dev](./docs/en/migration/v2board-dev.md)
-- [Migrate from v2board 1.7.4](./docs/en/migration/v2board-1.7.4.md)
-- [Migrate from v2board 1.7.3](./docs/en/migration/v2board-1.7.3.md)
-
-## 🛠️ Tech Stack
-
-- Backend: Laravel 11 + Octane
-- Admin Panel: React + Shadcn UI + TailwindCSS
-- User Frontend: Vue3 + TypeScript + NaiveUI
-- Deployment: Docker + Docker Compose
-- Caching: Redis + Octane Cache
-
-## 📷 Preview
-![Admin Preview](./docs/images/admin.png)
-
-![User Preview](./docs/images/user.png)
-
-## ⚠️ Disclaimer
-
-This project is for learning and communication purposes only. Users are responsible for any consequences of using this project.
-
-## ❤️ Support The Project
-
-If this project has helped you, donations are appreciated. They help support ongoing maintenance and would make me very happy.
-
-TRC20: `TLypStEWsVrj6Wz9mCxbXffqgt5yz3Y4XB`
-
-## 🌟 Maintenance Notice
-
-This project is currently under light maintenance. We will:
-- Fix critical bugs and security issues
-- Review and merge important pull requests
-- Provide necessary updates for compatibility
-
-However, new feature development may be limited.
-
-## 🔔 Important Notes
-
-1. Restart required after modifying admin path:
 ```bash
-docker compose restart
+cp .env.example .env
+chmod 600 .env
 ```
 
-2. For aaPanel installations, restart the Octane daemon process
+根据实际环境编辑 `.env`。不要把 `.env`、数据库文件、Token 或备份文件提交到仓库。
 
-## 🤝 Contributing
+### 3. 创建 Compose 配置
 
-Issues and Pull Requests are welcome to help improve the project.
+以仓库中的 `compose.sample.yaml` 或其他示例为基础创建生产文件：
 
-## 📈 Star History
+```bash
+cp compose.sample.yaml compose.yaml
+```
 
-[![Stargazers over time](https://starchart.cc/cedar2025/Xboard.svg)](https://starchart.cc/cedar2025/Xboard)
+生产环境建议：
+
+- 使用持久化卷保存数据库及 Xboard 数据；
+- `restart: unless-stopped`；
+- 仅暴露反向代理所需端口；
+- Xboard 与 Traefik 加入同一个外部 Docker 网络；
+- TLS 证书及 Traefik 动态配置保存在项目目录之外。
+
+### 4. 安装并启动
+
+首次安装请使用强密码替换示例值：
+
+```bash
+docker compose run --rm \
+  -e ENABLE_SQLITE=true \
+  -e ENABLE_REDIS=true \
+  -e ADMIN_ACCOUNT=admin@example.com \
+  xboard php artisan xboard:install
+
+docker compose up -d --build
+```
+
+### 5. 检查服务
+
+```bash
+docker compose ps
+docker compose logs --tail=100 xboard
+docker exec xboard-xboard-1 php artisan --version
+```
+
+## Traefik HTTPS
+
+Traefik 应独立部署，通过外部 Docker 网络访问 Xboard。域名先解析到服务器，再为 Xboard 服务配置 HTTPS Router、证书解析器和应用内部端口。不要将真实域名、证书私钥或 DNS API Token 写入本仓库。
+
+完成后检查：
+
+```bash
+curl -I https://panel.example.com
+```
+
+## 安装 Xboard-Node
+
+在后台进入“服务器管理”，创建机器并打开“服务器 Token”。复制面板生成的命令到目标 Ubuntu 服务器执行。命令应从以下地址获取源码安装器：
+
+```text
+https://raw.githubusercontent.com/a541825089/Xboard-Node/dev/install-source.sh
+```
+
+安装器会克隆自有仓库、编译 `xboard-node` 和 `xbctl`，然后创建 systemd 服务。详细说明见 [`Xboard-Node`](https://github.com/a541825089/Xboard-Node)。
+
+## SOCKS5 → VLESS + Reality 中转
+
+进入“节点管理”，点击“XBoard 中转助手”：
+
+1. 输入 SOCKS5 IP/域名、端口、账号和密码；
+2. 选择运行机器（已部署 Xboard-Node 的服务器）；
+3. 选择用户组；
+4. 填写 VLESS 对外地址、节点名称和 Reality SNI；
+5. 点击检测并创建。
+
+“用户组”决定哪些订阅用户能够看到并使用该 VLESS 节点。用户订阅只包含 VLESS + Reality 参数，不包含 SOCKS5 地址或认证信息。
+
+## 更新部署
+
+更新前先备份数据库、`.env` 和持久化数据：
+
+```bash
+cd /opt/xboard
+git fetch origin
+git pull --ff-only origin master
+docker compose up -d --build
+docker exec xboard-xboard-1 php artisan optimize:clear
+docker compose ps
+```
+
+如果应用源码没有挂载进容器，必须重新构建镜像；只执行 `docker compose restart` 不会包含新的源码。
+
+## 常用运维命令
+
+```bash
+cd /opt/xboard
+docker compose ps
+docker compose logs -f --tail=100 xboard
+docker compose restart xboard
+docker exec xboard-xboard-1 php artisan optimize:clear
+docker exec xboard-xboard-1 php artisan migrate --force
+```
+
+## 安全注意事项
+
+- 不提交 `.env`、`.env.*`、数据库备份、证书、Token、账号密码及临时备份文件；
+- 机器 Token 泄露后应立即在后台重置；
+- 更新前备份数据库和持久化卷；
+- 仅为节点入口开放必要端口，管理面板始终使用 HTTPS；
+- SOCKS5 凭据属于敏感信息，只应在管理端录入。
+
+## License
+
+MIT
+
