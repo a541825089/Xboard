@@ -12,7 +12,7 @@
     if (path.length === 0) {
       return ''
     }
-    return '/' + path[0]
+    return '/api/v2/' + path[0]
   }
 
   function normalizeBase(base) {
@@ -21,8 +21,28 @@
   }
 
   async function fetchJson(url, options = {}) {
-    const resp = await fetch(url, Object.assign({ credentials: 'same-origin' }, options))
-    return resp.json()
+    const auth = getAdminAuthorization()
+    const headers = new Headers(options.headers || {})
+    if (auth) headers.set('Authorization', auth)
+    headers.set('Content-Language', localStorage.getItem('i18nextLng') || 'zh-CN')
+    const resp = await fetch(url, Object.assign({ credentials: 'same-origin' }, options, { headers }))
+    const payload = await resp.json()
+    if (!resp.ok) {
+      throw new Error((payload && payload.message) || `HTTP ${resp.status}`)
+    }
+    return payload
+  }
+
+  function getAdminAuthorization() {
+    try {
+      // Xboard's storage wrapper uppercases keys (Xboard_ + access_token).
+      const raw = localStorage.getItem('XBOARD_ACCESS_TOKEN')
+      if (!raw) return ''
+      const parsed = JSON.parse(raw)
+      return typeof parsed === 'string' ? parsed : (parsed && parsed.value) || ''
+    } catch (err) {
+      return ''
+    }
   }
 
   async function fetchTemplates(base) {
@@ -34,13 +54,21 @@
     })
   }
 
-  async function generateRelay(base, shareLink) {
-    const url = normalizeBase(base) + '/server/manage/template/generate-relay'
+  async function createSocksRealityRelay(base, payload) {
+    const url = normalizeBase(base) + '/server/manage/template/create-socks-reality-relay'
     return fetchJson(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ share_link: shareLink, inbound_tag: 'vless-in' }),
+      body: JSON.stringify(payload),
     })
+  }
+
+  async function loadMachines(base) {
+    return fetchJson(normalizeBase(base) + '/server/machine/fetch')
+  }
+
+  async function loadGroups(base) {
+    return fetchJson(normalizeBase(base) + '/server/group/fetch')
   }
 
   async function testRelay(base, shareLink) {
@@ -76,49 +104,45 @@
 
   function getSourceLabel(node) {
     if (node.machine_id && node.machine_id !== 0) {
-      return 'Ô¶³Ì·şÎñÆ÷'
+      return 'è¿œç¨‹æœåŠ¡å™¨'
     }
     if (node.type && node.type !== 'server') {
-      return '½ÚµãÄ£Ê½'
+      return 'èŠ‚ç‚¹æ¨¡å¼'
     }
-    return '¶ÀÁ¢²¿Êğ'
+    return 'ç‹¬ç«‹éƒ¨ç½²'
   }
 
   function createButton() {
-    const btn = document.createElement('div')
-    btn.id = 'xb-relay-helper-btn'
-    Object.assign(btn.style, {
-      position: 'fixed',
-      right: '16px',
-      bottom: '16px',
-      zIndex: 2147483647,
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '10px',
-      fontFamily: 'sans-serif',
-    })
+    const button = document.createElement('button')
+    button.id = 'xb-relay-helper-btn'
+    button.type = 'button'
+    button.innerHTML = '<span aria-hidden="true" style="font-size:16px;line-height:1;">â‡„</span><span>ä¸­è½¬åŠ©æ‰‹</span>'
+    button.className = 'inline-flex items-center justify-center whitespace-nowrap font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground h-8 rounded-md px-3 text-xs space-x-2'
+    button.addEventListener('click', openRelayPanel)
+    return button
+  }
 
-    function makeAction(text, handler) {
-      const button = document.createElement('button')
-      button.textContent = text
-      Object.assign(button.style, {
-        padding: '10px 14px',
-        background: '#0f172a',
-        color: '#fff',
-        border: 'none',
-        borderRadius: '10px',
-        cursor: 'pointer',
-        fontSize: '13px',
-      })
-      button.addEventListener('click', handler)
-      return button
+  function isNodeManagePage() {
+    return window.location.hash.split('?')[0] === '#/server/manage'
+  }
+
+  function mountToolbarButton() {
+    const button = document.getElementById('xb-relay-helper-btn') || createButton()
+    if (!isNodeManagePage()) {
+      button.remove()
+      return
     }
-
-    btn.appendChild(makeAction('¿ìËÙÌí¼ÓÖĞ×ª', openRelayPanel))
-    btn.appendChild(makeAction('Ğ­Òé»­ÀÈ', openTemplatePanel))
-    btn.appendChild(makeAction('Á¬Í¨ĞÔ²âÊÔ', openTestPanel))
-    btn.appendChild(makeAction('½Úµã¹ÜÀí', openNodePanel))
-    document.body.appendChild(btn)
+    const search = Array.from(document.querySelectorAll('input')).find((input) => input.placeholder === 'æœç´¢èŠ‚ç‚¹...')
+    if (!search || !search.parentElement) {
+      return
+    }
+    const addButton = Array.from(search.parentElement.querySelectorAll(':scope > button')).find((item) => item.textContent.trim() === 'æ·»åŠ èŠ‚ç‚¹')
+    if (!addButton) {
+      return
+    }
+    if (button.parentElement !== search.parentElement || button.nextElementSibling !== search) {
+      search.parentElement.insertBefore(button, search)
+    }
   }
 
   function createOverlay() {
@@ -158,10 +182,10 @@
       background: '#f8fafc',
     })
     const title = document.createElement('div')
-    title.textContent = 'XBoard ÖĞ×ªÖúÊÖ'
+    title.textContent = 'XBoard ä¸­è½¬åŠ©æ‰‹'
     Object.assign(title.style, { fontSize: '16px', fontWeight: '700' })
     const close = document.createElement('button')
-    close.textContent = '¹Ø±Õ'
+    close.textContent = 'å…³é—­'
     Object.assign(close.style, {
       padding: '10px 14px',
       border: 'none',
@@ -170,7 +194,7 @@
       borderRadius: '10px',
       cursor: 'pointer',
     })
-    close.addEventListener('click', () => { overlay.style.display = 'none' })
+    close.addEventListener('click', hideOverlay)
     header.appendChild(title)
     header.appendChild(close)
 
@@ -190,10 +214,9 @@
     })
 
     const tabs = [
-      { id: 'relay', label: 'ÖĞ×ªÉú³É' },
-      { id: 'template', label: 'Ğ­Òé»­ÀÈ' },
-      { id: 'test', label: 'Á¬Í¨²âÊÔ' },
-      { id: 'nodes', label: '½Úµã¹ÜÀí' },
+      { id: 'relay', label: 'ä¸€é”®ä¸­è½¬' },
+      { id: 'template', label: 'åè®®ç”»å»Š' },
+      { id: 'test', label: 'è¿é€šæµ‹è¯•' },
     ]
 
     tabs.forEach((tab) => {
@@ -229,6 +252,9 @@
     body.appendChild(content)
     panel.appendChild(body)
     overlay.appendChild(panel)
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) hideOverlay()
+    })
     document.body.appendChild(overlay)
     return overlay
   }
@@ -271,22 +297,93 @@
   }
 
   function renderRelayTab(container) {
-    container.appendChild(createCard('Ìí¼ÓÖĞ×ª', 'Õ³Ìù·ÖÏíÁ´½Ó£¬×Ô¶¯Ê¶±ğĞ­Òé²¢Éú³ÉÖĞ×ª³öÕ¾ÅäÖÃ¡£'))
-    const input = document.createElement('textarea')
-    input.placeholder = 'ÊäÈë share link£¬ÀıÈç vless://... »ò vmess://...'
-    Object.assign(input.style, {
-      width: '100%',
-      minHeight: '120px',
-      marginBottom: '12px',
-      padding: '14px',
-      borderRadius: '14px',
-      border: '1px solid #cbd5e1',
-      fontFamily: 'monospace',
-      fontSize: '14px',
+    container.appendChild(createCard('ä¸€é”®æ·»åŠ  SOCKS5 ä¸­è½¬', 'æ£€æµ‹ SOCKS5 åè‡ªåŠ¨åˆ›å»º VLESS + Reality èŠ‚ç‚¹ã€‚Reality å¯†é’¥å’Œç©ºé—²ç«¯å£ç”±ç³»ç»Ÿç”Ÿæˆï¼Œä¸Šæ¸¸ä¿¡æ¯ä¸ä¼šè¿›å…¥ç”¨æˆ·è®¢é˜…ã€‚'))
+
+    const form = document.createElement('div')
+    Object.assign(form.style, {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+      gap: '12px',
+      marginBottom: '14px',
+    })
+
+    function field(label, type, placeholder) {
+      const wrap = document.createElement('label')
+      Object.assign(wrap.style, { display: 'flex', flexDirection: 'column', gap: '6px', color: '#334155', fontSize: '13px' })
+      const caption = document.createElement('span')
+      caption.textContent = label
+      const input = document.createElement('input')
+      input.type = type
+      input.placeholder = placeholder || ''
+      Object.assign(input.style, {
+        width: '100%', padding: '11px 12px', borderRadius: '12px',
+        border: '1px solid #cbd5e1', fontSize: '14px', boxSizing: 'border-box',
+      })
+      wrap.appendChild(caption)
+      wrap.appendChild(input)
+      form.appendChild(wrap)
+      return input
+    }
+
+    function selectField(label) {
+      const wrap = document.createElement('label')
+      Object.assign(wrap.style, { display: 'flex', flexDirection: 'column', gap: '6px', color: '#334155', fontSize: '13px' })
+      const caption = document.createElement('span')
+      caption.textContent = label
+      const select = document.createElement('select')
+      Object.assign(select.style, {
+        width: '100%', padding: '11px 12px', borderRadius: '12px',
+        border: '1px solid #cbd5e1', background: '#fff', fontSize: '14px', boxSizing: 'border-box',
+      })
+      wrap.appendChild(caption)
+      wrap.appendChild(select)
+      form.appendChild(wrap)
+      return select
+    }
+
+    const socksHost = field('SOCKS5 IP / åŸŸå', 'text', 'ä¾‹å¦‚ 203.0.113.10')
+    const socksPort = field('SOCKS5 ç«¯å£', 'number', '1 - 65535')
+    const socksUsername = field('SOCKS5 ç”¨æˆ·å', 'text', 'æ— è®¤è¯å¯ç•™ç©º')
+    const socksPassword = field('SOCKS5 å¯†ç ', 'password', 'æ— è®¤è¯å¯ç•™ç©º')
+    const machineSelect = selectField('è¿è¡Œæœºå™¨')
+    const groupSelect = selectField('ç”¨æˆ·ç»„')
+    const nodeHost = field('VLESS å…¥å£åœ°å€', 'text', 'Xboard-Node çš„å…¬ç½‘ IP æˆ–åŸŸå')
+    const nodeName = field('èŠ‚ç‚¹åç§°', 'text', 'VLESS Reality é«˜é€Ÿä¸­è½¬')
+    const serverName = field('Reality SNI', 'text', 'www.cloudflare.com')
+    serverName.value = 'www.cloudflare.com'
+
+    const fullWidth = serverName.parentElement
+    fullWidth.style.gridColumn = '1 / -1'
+
+    machineSelect.innerHTML = '<option value="">æ­£åœ¨åŠ è½½æœºå™¨â€¦</option>'
+    groupSelect.innerHTML = '<option value="">æ­£åœ¨åŠ è½½ç”¨æˆ·ç»„â€¦</option>'
+    const base = detectAdminBase()
+    Promise.all([loadMachines(base), loadGroups(base)]).then(([machinesRes, groupsRes]) => {
+      const machines = Array.isArray(machinesRes && machinesRes.data) ? machinesRes.data : []
+      machineSelect.innerHTML = '<option value="">è¯·é€‰æ‹©åœ¨çº¿æœºå™¨</option>'
+      machines.forEach((machine) => {
+        const option = document.createElement('option')
+        option.value = String(machine.id)
+        option.textContent = `${machine.name}ï¼ˆID ${machine.id}${machine.last_seen_at ? 'ï¼Œå·²è¿æ¥' : 'ï¼Œæœªè¿æ¥'}ï¼‰`
+        option.disabled = !machine.is_active || !machine.last_seen_at
+        machineSelect.appendChild(option)
+      })
+      const groups = Array.isArray(groupsRes && groupsRes.data) ? groupsRes.data : []
+      groupSelect.innerHTML = '<option value="">è¯·é€‰æ‹©ç”¨æˆ·ç»„</option>'
+      groups.forEach((group) => {
+        const option = document.createElement('option')
+        option.value = String(group.id)
+        option.textContent = `${group.name}ï¼ˆID ${group.id}ï¼‰`
+        groupSelect.appendChild(option)
+      })
+    }).catch((err) => {
+      machineSelect.innerHTML = '<option value="">æœºå™¨åŠ è½½å¤±è´¥</option>'
+      groupSelect.innerHTML = '<option value="">ç”¨æˆ·ç»„åŠ è½½å¤±è´¥</option>'
+      console.error(err)
     })
 
     const button = document.createElement('button')
-    button.textContent = 'Éú³ÉÖĞ×ªÅäÖÃ'
+    button.textContent = 'æ£€æµ‹å¹¶åˆ›å»º VLESS + Reality ä¸­è½¬'
     Object.assign(button.style, {
       padding: '11px 16px',
       borderRadius: '12px',
@@ -310,115 +407,64 @@
       marginTop: '12px',
     })
 
-    const actions = document.createElement('div')
-    Object.assign(actions.style, { display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' })
-
-    const qrBtn = document.createElement('button')
-    qrBtn.textContent = 'Éú³É¶şÎ¬Âë'
-    Object.assign(qrBtn.style, {
-      padding: '10px 14px',
-      borderRadius: '12px',
-      background: '#14b8a6',
-      color: '#ffffff',
-      border: 'none',
-      cursor: 'pointer',
-    })
-
-    const testBtn = document.createElement('button')
-    testBtn.textContent = '²âÊÔÁ¬Í¨ĞÔ'
-    Object.assign(testBtn.style, {
-      padding: '10px 14px',
-      borderRadius: '12px',
-      background: '#2563eb',
-      color: '#ffffff',
-      border: 'none',
-      cursor: 'pointer',
-    })
-
-    const qrContainer = document.createElement('div')
-    Object.assign(qrContainer.style, {
-      marginTop: '16px',
-      display: 'flex',
-      justifyContent: 'flex-start',
-      alignItems: 'center',
-      gap: '14px',
-      flexWrap: 'wrap',
-    })
-
     button.addEventListener('click', async () => {
-      const value = input.value.trim()
-      if (!value) {
-        alert('ÇëÏÈÊäÈë·ÖÏíÁ´½Ó')
+      const payload = {
+        socks_host: socksHost.value.trim(),
+        socks_port: Number(socksPort.value),
+        socks_username: socksUsername.value,
+        socks_password: socksPassword.value,
+        machine_id: Number(machineSelect.value),
+        group_ids: groupSelect.value ? [Number(groupSelect.value)] : [],
+        node_host: nodeHost.value.trim(),
+        name: nodeName.value.trim(),
+        server_name: serverName.value.trim(),
+      }
+      if (!payload.socks_host || !payload.socks_port || !payload.machine_id || !payload.group_ids.length || !payload.node_host) {
+        alert('è¯·å®Œæ•´å¡«å†™ SOCKS5 åœ°å€ã€ç«¯å£ã€è¿è¡Œæœºå™¨ã€ç”¨æˆ·ç»„å’Œ VLESS å…¥å£åœ°å€')
         return
       }
-      resultBox.textContent = 'ÕıÔÚÉú³ÉÅäÖÃ¡­'
-      const base = detectAdminBase()
+      button.disabled = true
+      button.textContent = 'æ­£åœ¨æ£€æµ‹å¹¶åˆ›å»ºâ€¦'
+      resultBox.textContent = 'æ­£åœ¨éªŒè¯ SOCKS5 è®¤è¯åŠå‡ºå£ IPï¼Œç„¶åç”Ÿæˆ Reality å¯†é’¥å’Œç©ºé—²ç«¯å£â€¦'
       try {
-        const res = await generateRelay(base, value)
+        const res = await createSocksRealityRelay(base, payload)
         if (res && res.data) {
-          resultBox.textContent = JSON.stringify(res.data, null, 2)
-          await copyToClipboard(JSON.stringify(res.data, null, 2))
+          resultBox.textContent = [
+            'åˆ›å»ºæˆåŠŸ',
+            `èŠ‚ç‚¹ï¼š${res.data.name}`,
+            `ç”¨æˆ·åè®®ï¼š${res.data.protocol.toUpperCase()} + ${res.data.security}`,
+            `å…¥å£ï¼š${res.data.host}:${res.data.port}`,
+            `SOCKS5 æ£€æµ‹ï¼š${res.data.socks5_check}`,
+            `å‡ºå£ IPï¼š${res.data.exit_ip}`,
+            `è®¢é˜…æ³„éœ²æ£€æŸ¥ï¼š${res.data.subscription_check}`,
+          ].join('\n')
+          socksPassword.value = ''
         } else {
           resultBox.textContent = JSON.stringify(res, null, 2)
         }
       } catch (err) {
-        resultBox.textContent = 'Éú³ÉÊ§°Ü£º' + ((err && err.message) || JSON.stringify(err))
-      }
-    })
-
-    qrBtn.addEventListener('click', () => {
-      const value = input.value.trim()
-      if (!value) {
-        alert('ÇëÏÈÊäÈë·ÖÏíÁ´½Ó')
-        return
-      }
-      qrContainer.innerHTML = ''
-      const img = document.createElement('img')
-      img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=' + encodeURIComponent(value)
-      img.alt = 'QR Code'
-      Object.assign(img.style, { borderRadius: '16px', border: '1px solid #cbd5e1' })
-      qrContainer.appendChild(img)
-    })
-
-    testBtn.addEventListener('click', async () => {
-      const value = input.value.trim()
-      if (!value) {
-        alert('ÇëÏÈÊäÈë·ÖÏíÁ´½Ó')
-        return
-      }
-      resultBox.textContent = 'ÕıÔÚ²âÊÔÁ¬Í¨ĞÔ¡­'
-      const base = detectAdminBase()
-      try {
-        const res = await testRelay(base, value)
-        if (res && res.data) {
-          resultBox.textContent = JSON.stringify(res.data, null, 2)
-        } else {
-          resultBox.textContent = JSON.stringify(res, null, 2)
-        }
-      } catch (err) {
-        resultBox.textContent = '²âÊÔÊ§°Ü£º' + ((err && err.message) || JSON.stringify(err))
+        resultBox.textContent = 'åˆ›å»ºå¤±è´¥ï¼š' + ((err && err.message) || JSON.stringify(err))
+      } finally {
+        button.disabled = false
+        button.textContent = 'æ£€æµ‹å¹¶åˆ›å»º VLESS + Reality ä¸­è½¬'
       }
     })
 
     const hint = document.createElement('div')
-    hint.textContent = 'ÌáÊ¾£º½á¹û»á¸´ÖÆµ½¼ôÌù°å£¬¿ÉÖ±½ÓÕ³Ìùµ½×Ô¶¨Òå Outbounds / Custom Routes¡£'
+    hint.textContent = 'å®‰å…¨è¯´æ˜ï¼šSOCKS5 ä¿¡æ¯åªä¿å­˜äºèŠ‚ç‚¹æœåŠ¡ç«¯é…ç½®ï¼›ç”¨æˆ·è®¢é˜…åªåŒ…å« VLESS + Realityã€‚åˆ›å»ºå¤±è´¥æ—¶ä¸ä¼šä¿ç•™åŠæˆå“èŠ‚ç‚¹ã€‚'
     hint.style.color = '#475569'
     hint.style.marginTop = '8px'
 
-    container.appendChild(input)
+    container.appendChild(form)
     container.appendChild(button)
-    actions.appendChild(qrBtn)
-    actions.appendChild(testBtn)
-    container.appendChild(actions)
     container.appendChild(hint)
     container.appendChild(resultBox)
-    container.appendChild(qrContainer)
   }
 
   function renderTemplateTab(container) {
-    container.appendChild(createCard('Ğ­Òé»­ÀÈ', '¿ìËÙä¯ÀÀ²¢¸´ÖÆÔ¤ÖÃÖĞ×ªÄ£°å¡£'))
+    container.appendChild(createCard('åè®®ç”»å»Š', 'å¿«é€Ÿæµè§ˆå¹¶å¤åˆ¶é¢„ç½®ä¸­è½¬æ¨¡æ¿ã€‚'))
     const button = document.createElement('button')
-    button.textContent = '¼ÓÔØĞ­Òé»­ÀÈ'
+    button.textContent = 'åŠ è½½åè®®ç”»å»Š'
     Object.assign(button.style, {
       padding: '11px 16px',
       borderRadius: '12px',
@@ -436,7 +482,7 @@
     })
 
     button.addEventListener('click', async () => {
-      list.innerHTML = 'ÕıÔÚ¼ÓÔØ¡­'
+      list.innerHTML = 'æ­£åœ¨åŠ è½½â€¦'
       const base = detectAdminBase()
       try {
         const res = await fetchTemplates(base)
@@ -471,7 +517,7 @@
               wordBreak: 'break-word',
             })
             const copy = document.createElement('button')
-            copy.textContent = '¸´ÖÆÉèÖÃ'
+            copy.textContent = 'å¤åˆ¶è®¾ç½®'
             Object.assign(copy.style, {
               marginTop: '8px',
               padding: '10px 14px',
@@ -483,7 +529,7 @@
             })
             copy.addEventListener('click', async () => {
               await copyToClipboard(JSON.stringify(tpl.protocol_settings || {}, null, 2))
-              alert('ÒÑ¸´ÖÆÉèÖÃ')
+              alert('å·²å¤åˆ¶è®¾ç½®')
             })
             card.appendChild(title)
             card.appendChild(notes)
@@ -492,10 +538,10 @@
             list.appendChild(card)
           })
         } else {
-          list.textContent = 'ÎŞ¿ÉÓÃÄ£°å'
+          list.textContent = 'æ— å¯ç”¨æ¨¡æ¿'
         }
       } catch (err) {
-        list.textContent = '¼ÓÔØÊ§°Ü£º' + ((err && err.message) || JSON.stringify(err))
+        list.textContent = 'åŠ è½½å¤±è´¥ï¼š' + ((err && err.message) || JSON.stringify(err))
       }
     })
 
@@ -504,9 +550,9 @@
   }
 
   function renderTestTab(container) {
-    container.appendChild(createCard('Á¬Í¨ĞÔ²âÊÔ', 'Ö±½Ó¼ì²é·ÖÏíÁ´½ÓÄ¿±êµØÖ·ÊÇ·ñ¿É´ï¡£'))
+    container.appendChild(createCard('è¿é€šæ€§æµ‹è¯•', 'ç›´æ¥æ£€æŸ¥åˆ†äº«é“¾æ¥ç›®æ ‡åœ°å€æ˜¯å¦å¯è¾¾ã€‚'))
     const input = document.createElement('textarea')
-    input.placeholder = 'ÊäÈëÒª²âÊÔµÄ·ÖÏíÁ´½Ó'
+    input.placeholder = 'è¾“å…¥è¦æµ‹è¯•çš„åˆ†äº«é“¾æ¥'
     Object.assign(input.style, {
       width: '100%',
       minHeight: '120px',
@@ -518,7 +564,7 @@
       fontSize: '14px',
     })
     const button = document.createElement('button')
-    button.textContent = '¿ªÊ¼²âÊÔ'
+    button.textContent = 'å¼€å§‹æµ‹è¯•'
     Object.assign(button.style, {
       padding: '11px 16px',
       borderRadius: '12px',
@@ -542,10 +588,10 @@
     button.addEventListener('click', async () => {
       const value = input.value.trim()
       if (!value) {
-        alert('ÇëÏÈÊäÈë·ÖÏíÁ´½Ó')
+        alert('è¯·å…ˆè¾“å…¥åˆ†äº«é“¾æ¥')
         return
       }
-      result.textContent = 'ÕıÔÚ²âÊÔ¡­'
+      result.textContent = 'æ­£åœ¨æµ‹è¯•â€¦'
       const base = detectAdminBase()
       try {
         const res = await testRelay(base, value)
@@ -555,7 +601,7 @@
           result.textContent = JSON.stringify(res, null, 2)
         }
       } catch (err) {
-        result.textContent = '²âÊÔÊ§°Ü£º' + ((err && err.message) || JSON.stringify(err))
+        result.textContent = 'æµ‹è¯•å¤±è´¥ï¼š' + ((err && err.message) || JSON.stringify(err))
       }
     })
     container.appendChild(input)
@@ -564,9 +610,9 @@
   }
 
   function renderNodeTab(container) {
-    container.appendChild(createCard('½Úµã¹ÜÀí', 'ÏÔÊ¾¶à·şÎñÆ÷ÁĞ±í£¬ÀëÏß·şÎñÆ÷²»¿ÉÑ¡£¬²¢Ö§³ÖÅúÁ¿É¾³ı¡£'))
+    container.appendChild(createCard('èŠ‚ç‚¹ç®¡ç†', 'æ˜¾ç¤ºå¤šæœåŠ¡å™¨åˆ—è¡¨ï¼Œç¦»çº¿æœåŠ¡å™¨ä¸å¯é€‰ï¼Œå¹¶æ”¯æŒæ‰¹é‡åˆ é™¤ã€‚'))
     const loadBtn = document.createElement('button')
-    loadBtn.textContent = '¼ÓÔØ½ÚµãÁĞ±í'
+    loadBtn.textContent = 'åŠ è½½èŠ‚ç‚¹åˆ—è¡¨'
     Object.assign(loadBtn.style, {
       padding: '11px 16px',
       borderRadius: '12px',
@@ -590,7 +636,7 @@
       minWidth: '720px',
     })
     const thead = document.createElement('thead')
-    thead.innerHTML = '<tr><th style="padding:12px;border-bottom:1px solid #e2e8f0;text-align:left;">Ñ¡Ôñ</th><th style="padding:12px;border-bottom:1px solid #e2e8f0;text-align:left;">·şÎñÆ÷</th><th style="padding:12px;border-bottom:1px solid #e2e8f0;text-align:left;">×´Ì¬</th><th style="padding:12px;border-bottom:1px solid #e2e8f0;text-align:left;">À´Ô´</th><th style="padding:12px;border-bottom:1px solid #e2e8f0;text-align:left;">»úÆ÷ID</th></tr>'
+    thead.innerHTML = '<tr><th style="padding:12px;border-bottom:1px solid #e2e8f0;text-align:left;">é€‰æ‹©</th><th style="padding:12px;border-bottom:1px solid #e2e8f0;text-align:left;">æœåŠ¡å™¨</th><th style="padding:12px;border-bottom:1px solid #e2e8f0;text-align:left;">çŠ¶æ€</th><th style="padding:12px;border-bottom:1px solid #e2e8f0;text-align:left;">æ¥æº</th><th style="padding:12px;border-bottom:1px solid #e2e8f0;text-align:left;">æœºå™¨ID</th></tr>'
     const tbody = document.createElement('tbody')
     table.appendChild(thead)
     table.appendChild(tbody)
@@ -599,10 +645,10 @@
     const actions = document.createElement('div')
     Object.assign(actions.style, { display: 'flex', gap: '12px', flexWrap: 'wrap', marginTop: '12px' })
     const selectedLabel = document.createElement('div')
-    selectedLabel.textContent = 'ÒÑÑ¡ 0 ¸ö½Úµã'
+    selectedLabel.textContent = 'å·²é€‰ 0 ä¸ªèŠ‚ç‚¹'
     selectedLabel.style.alignSelf = 'center'
     const deleteBtn = document.createElement('button')
-    deleteBtn.textContent = 'ÅúÁ¿É¾³ıÑ¡ÖĞ½Úµã'
+    deleteBtn.textContent = 'æ‰¹é‡åˆ é™¤é€‰ä¸­èŠ‚ç‚¹'
     Object.assign(deleteBtn.style, {
       padding: '10px 14px',
       borderRadius: '12px',
@@ -615,38 +661,38 @@
     deleteBtn.addEventListener('click', async () => {
       const ids = Array.from(STATE.selectedNodeIds)
       if (ids.length === 0) {
-        alert('ÇëÏÈÑ¡ÔñÒªÉ¾³ıµÄ½Úµã')
+        alert('è¯·å…ˆé€‰æ‹©è¦åˆ é™¤çš„èŠ‚ç‚¹')
         return
       }
-      if (!confirm(`È·ÈÏÉ¾³ı ${ids.length} ¸ö½Úµã£¿´Ë²Ù×÷²»¿É»Ö¸´¡£`)) return
+      if (!confirm(`ç¡®è®¤åˆ é™¤ ${ids.length} ä¸ªèŠ‚ç‚¹ï¼Ÿæ­¤æ“ä½œä¸å¯æ¢å¤ã€‚`)) return
       const base = detectAdminBase()
       try {
         const res = await batchDelete(base, ids)
         if (res && res.data) {
-          alert('ÅúÁ¿É¾³ı³É¹¦')
+          alert('æ‰¹é‡åˆ é™¤æˆåŠŸ')
           await loadNodes(base)
           renderNodeTable(tbody, selectedLabel, deleteBtn)
         } else {
-          alert('ÅúÁ¿É¾³ıÊ§°Ü')
+          alert('æ‰¹é‡åˆ é™¤å¤±è´¥')
         }
       } catch (err) {
-        alert('ÅúÁ¿É¾³ıÊ§°Ü£º' + ((err && err.message) || JSON.stringify(err)))
+        alert('æ‰¹é‡åˆ é™¤å¤±è´¥ï¼š' + ((err && err.message) || JSON.stringify(err)))
       }
     })
     actions.appendChild(selectedLabel)
     actions.appendChild(deleteBtn)
 
     loadBtn.addEventListener('click', async () => {
-      loadBtn.textContent = '¼ÓÔØÖĞ¡­'
+      loadBtn.textContent = 'åŠ è½½ä¸­â€¦'
       loadBtn.disabled = true
       const base = detectAdminBase()
       try {
         await loadNodes(base)
         renderNodeTable(tbody, selectedLabel, deleteBtn)
       } catch (err) {
-        tbody.innerHTML = '<tr><td colspan="5" style="padding:14px;color:#dc2626;">¼ÓÔØ½ÚµãÊ§°Ü</td></tr>'
+        tbody.innerHTML = '<tr><td colspan="5" style="padding:14px;color:#dc2626;">åŠ è½½èŠ‚ç‚¹å¤±è´¥</td></tr>'
       } finally {
-        loadBtn.textContent = '¼ÓÔØ½ÚµãÁĞ±í'
+        loadBtn.textContent = 'åŠ è½½èŠ‚ç‚¹åˆ—è¡¨'
         loadBtn.disabled = false
       }
     })
@@ -660,8 +706,8 @@
     tbody.innerHTML = ''
     STATE.selectedNodeIds.clear()
     if (!Array.isArray(STATE.nodes) || STATE.nodes.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" style="padding:14px;">ÔİÎŞ½ÚµãÊı¾İ£¬ÇëÏÈ¼ÓÔØ¡£</td></tr>'
-      selectedLabel.textContent = 'ÒÑÑ¡ 0 ¸ö½Úµã'
+      tbody.innerHTML = '<tr><td colspan="5" style="padding:14px;">æš‚æ— èŠ‚ç‚¹æ•°æ®ï¼Œè¯·å…ˆåŠ è½½ã€‚</td></tr>'
+      selectedLabel.textContent = 'å·²é€‰ 0 ä¸ªèŠ‚ç‚¹'
       deleteBtn.disabled = true
       return
     }
@@ -673,9 +719,9 @@
       row.innerHTML = `
         <td style="padding:12px;border-bottom:1px solid #e2e8f0;vertical-align:middle;"></td>
         <td style="padding:12px;border-bottom:1px solid #e2e8f0;vertical-align:middle;">${escapeHtml(node.name || node.title || node.server_name || 'Unnamed')}</td>
-        <td style="padding:12px;border-bottom:1px solid #e2e8f0;vertical-align:middle;">${offline ? 'ÀëÏß' : 'ÔÚÏß'}</td>
+        <td style="padding:12px;border-bottom:1px solid #e2e8f0;vertical-align:middle;">${offline ? 'ç¦»çº¿' : 'åœ¨çº¿'}</td>
         <td style="padding:12px;border-bottom:1px solid #e2e8f0;vertical-align:middle;">${escapeHtml(getSourceLabel(node))}</td>
-        <td style="padding:12px;border-bottom:1px solid #e2e8f0;vertical-align:middle;">${escapeHtml(node.machine_id ? node.machine_id.toString() : 'ÎŞ')}</td>
+        <td style="padding:12px;border-bottom:1px solid #e2e8f0;vertical-align:middle;">${escapeHtml(node.machine_id ? node.machine_id.toString() : 'æ— ')}</td>
       `
       const checkboxTd = row.querySelector('td')
       const checkbox = document.createElement('input')
@@ -688,13 +734,13 @@
         } else {
           STATE.selectedNodeIds.delete(node.id)
         }
-        selectedLabel.textContent = `ÒÑÑ¡ ${STATE.selectedNodeIds.size} ¸ö½Úµã`
+        selectedLabel.textContent = `å·²é€‰ ${STATE.selectedNodeIds.size} ä¸ªèŠ‚ç‚¹`
         deleteBtn.disabled = STATE.selectedNodeIds.size === 0
       })
       checkboxTd.appendChild(checkbox)
       tbody.appendChild(row)
     })
-    selectedLabel.textContent = 'ÒÑÑ¡ 0 ¸ö½Úµã'
+    selectedLabel.textContent = 'å·²é€‰ 0 ä¸ªèŠ‚ç‚¹'
     deleteBtn.disabled = true
   }
 
@@ -743,10 +789,6 @@
     showOverlay('test')
   }
 
-  function openNodePanel() {
-    showOverlay('nodes')
-  }
-
   function showOverlay(tab) {
     const overlay = document.getElementById('xb-relay-helper-overlay')
     if (!overlay) return
@@ -756,10 +798,18 @@
     renderContent()
   }
 
+  function hideOverlay() {
+    const overlay = document.getElementById('xb-relay-helper-overlay')
+    if (overlay) overlay.style.display = 'none'
+  }
+
   const overlay = createOverlay()
-  createButton()
+  const toolbarObserver = new MutationObserver(() => mountToolbarButton())
+  toolbarObserver.observe(document.documentElement, { childList: true, subtree: true })
+  window.addEventListener('hashchange', mountToolbarButton)
   document.addEventListener('DOMContentLoaded', () => {
     overlay.style.display = 'none'
+    mountToolbarButton()
   })
 
   function renderContent() {
@@ -772,8 +822,6 @@
       renderTemplateTab(content)
     } else if (STATE.currentTab === 'test') {
       renderTestTab(content)
-    } else if (STATE.currentTab === 'nodes') {
-      renderNodeTab(content)
     }
   }
 
@@ -782,5 +830,7 @@
     if (overlayEl) {
       overlayEl.style.display = 'none'
     }
+    mountToolbarButton()
   })
 })()
+
