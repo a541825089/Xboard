@@ -95,6 +95,7 @@ class AdminRoute
                 $router->post('/batchResetTraffic', [ManageController::class, 'batchResetTraffic']);
                 $router->get('/generateEchKey', [ManageController::class, 'generateEchKey']);
                 // Template generator
+                $router->post('/template/create-socks-reality-relay', [\App\Http\Controllers\V2\Admin\TemplateController::class, 'createSocksRealityRelay']);
                 $router->post('/template/generate-relay', [\App\Http\Controllers\V2\Admin\TemplateController::class, 'generateRelay']);
                 $router->post('/template/generate-templates', [\App\Http\Controllers\V2\Admin\TemplateController::class, 'generateTemplates']);
                 $router->post('/template/test-relay', [\App\Http\Controllers\V2\Admin\TemplateController::class, 'testRelay']);
@@ -299,3 +300,4 @@ class AdminRoute
 
     }
 }
+
