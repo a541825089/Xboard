@@ -63,6 +63,55 @@
     })
   }
 
+  function parseBatchRelayText(text) {
+    const rawText = String(text || '')
+    if (new Blob([rawText]).size > 64 * 1024) {
+      return { entries: [], errors: ['TXT 内容不能超过 64 KB'] }
+    }
+    const rawLines = rawText.replace(/^\uFEFF/, '').split(/\r?\n/)
+    const entries = []
+    const errors = []
+    rawLines.forEach((rawLine, index) => {
+      const lineNumber = index + 1
+      const line = rawLine.trim()
+      if (!line || line.startsWith('#')) return
+      const fields = line.split(':')
+      if (fields.length !== 8) {
+        errors.push(`第 ${lineNumber} 行：必须包含 8 个以冒号分隔的字段`)
+        return
+      }
+      const [nodeHost, name, machineSidText, groupIdText, socksHost, portText, username, password] = fields.map((field) => field.trim())
+      const machineId = Number(machineSidText)
+      const rawGroupIds = groupIdText.split(',').map((value) => value.trim())
+      const groupIds = Array.from(new Set(rawGroupIds.map((value) => Number(value))))
+      const port = Number(portText)
+      if (!nodeHost || !name || !socksHost) {
+        errors.push(`第 ${lineNumber} 行：VLESS 入口地址、节点名称和 SOCKS5 IP 不能为空`)
+        return
+      }
+      if (!/^[a-zA-Z0-9.-]+$/.test(nodeHost) || !/^[a-zA-Z0-9.-]+$/.test(socksHost)) {
+        errors.push(`第 ${lineNumber} 行：入口地址和 SOCKS5 地址仅支持 IPv4 或域名`)
+        return
+      }
+      if (!Number.isInteger(machineId) || machineId < 1) {
+        errors.push(`第 ${lineNumber} 行：运行机器 SID 无效`)
+        return
+      }
+      if (rawGroupIds.length < 1 || rawGroupIds.some((value) => value === '') || groupIds.some((groupId) => !Number.isInteger(groupId) || groupId < 1)) {
+        errors.push(`第 ${lineNumber} 行：用户组 ID 无效，多个 ID 请使用英文逗号分隔`)
+        return
+      }
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        errors.push(`第 ${lineNumber} 行：SOCKS5 端口无效`)
+        return
+      }
+      entries.push({ lineNumber, nodeHost, name, machineId, groupIds, socksHost, port, username, password })
+    })
+    if (entries.length < 1 && errors.length === 0) errors.push('TXT 中没有可导入的节点')
+    if (entries.length > 30) errors.push(`有效节点共 ${entries.length} 个，单次最多导入 30 个`)
+    return { entries, errors }
+  }
+
   async function loadMachines(base) {
     return fetchJson(normalizeBase(base) + '/server/machine/fetch')
   }
@@ -341,12 +390,143 @@
       return select
     }
 
+    function groupPickerField(label) {
+      const wrap = document.createElement('div')
+      Object.assign(wrap.style, { display: 'flex', flexDirection: 'column', gap: '6px', color: '#334155', fontSize: '13px' })
+      const caption = document.createElement('span')
+      caption.textContent = label
+      const control = document.createElement('div')
+      control.style.position = 'relative'
+      const trigger = document.createElement('button')
+      trigger.type = 'button'
+      Object.assign(trigger.style, {
+        width: '100%', minHeight: '44px', padding: '7px 10px', borderRadius: '12px',
+        border: '1px solid #cbd5e1', background: '#fff', boxSizing: 'border-box',
+        display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', textAlign: 'left',
+      })
+      const values = document.createElement('span')
+      Object.assign(values.style, { flex: '1', display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' })
+      const arrow = document.createElement('span')
+      arrow.textContent = '⌄'
+      Object.assign(arrow.style, { fontSize: '18px', color: '#64748b', flexShrink: '0' })
+      const menu = document.createElement('div')
+      Object.assign(menu.style, {
+        display: 'none', position: 'absolute', left: '0', right: '0', top: 'calc(100% + 6px)',
+        zIndex: '30', maxHeight: '220px', overflowY: 'auto', padding: '8px',
+        border: '1px solid #cbd5e1', borderRadius: '12px', background: '#fff',
+        boxShadow: '0 12px 30px rgba(15, 23, 42, 0.16)',
+      })
+      const selected = new Map()
+      let groups = []
+      let statusText = '正在加载用户组…'
+
+      function renderValues() {
+        values.innerHTML = ''
+        if (selected.size === 0) {
+          const placeholder = document.createElement('span')
+          placeholder.textContent = statusText || '请选择用户组'
+          placeholder.style.color = '#94a3b8'
+          values.appendChild(placeholder)
+          return
+        }
+        selected.forEach((group, groupId) => {
+          const chip = document.createElement('span')
+          Object.assign(chip.style, {
+            display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '5px 8px',
+            borderRadius: '8px', background: '#0f172a', color: '#fff', fontSize: '12px',
+          })
+          const name = document.createElement('span')
+          name.textContent = `${group.name}（ID ${groupId}）`
+          const remove = document.createElement('span')
+          remove.textContent = '×'
+          Object.assign(remove.style, { color: '#cbd5e1', fontSize: '16px', lineHeight: '1' })
+          remove.addEventListener('click', (event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            selected.delete(groupId)
+            renderValues()
+            renderMenu()
+          })
+          chip.appendChild(name)
+          chip.appendChild(remove)
+          values.appendChild(chip)
+        })
+      }
+
+      function renderMenu() {
+        menu.innerHTML = ''
+        if (groups.length === 0) {
+          const empty = document.createElement('div')
+          empty.textContent = statusText || '暂无用户组'
+          Object.assign(empty.style, { padding: '8px', color: '#94a3b8' })
+          menu.appendChild(empty)
+          return
+        }
+        groups.forEach((group) => {
+          const groupId = Number(group.id)
+          const row = document.createElement('label')
+          Object.assign(row.style, {
+            display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 10px',
+            borderRadius: '9px', cursor: 'pointer', color: '#0f172a',
+          })
+          row.addEventListener('mouseenter', () => { row.style.background = '#f1f5f9' })
+          row.addEventListener('mouseleave', () => { row.style.background = '#fff' })
+          const checkbox = document.createElement('input')
+          checkbox.type = 'checkbox'
+          checkbox.checked = selected.has(groupId)
+          checkbox.style.width = '16px'
+          checkbox.style.height = '16px'
+          checkbox.addEventListener('change', () => {
+            if (checkbox.checked) selected.set(groupId, group)
+            else selected.delete(groupId)
+            renderValues()
+          })
+          const text = document.createElement('span')
+          text.textContent = `${group.name}（ID ${group.id}）`
+          row.appendChild(checkbox)
+          row.appendChild(text)
+          menu.appendChild(row)
+        })
+      }
+
+      trigger.appendChild(values)
+      trigger.appendChild(arrow)
+      trigger.addEventListener('click', () => {
+        const opening = menu.style.display === 'none'
+        menu.style.display = opening ? 'block' : 'none'
+        arrow.textContent = opening ? '⌃' : '⌄'
+      })
+      control.appendChild(trigger)
+      control.appendChild(menu)
+      wrap.appendChild(caption)
+      wrap.appendChild(control)
+      form.appendChild(wrap)
+      renderValues()
+      renderMenu()
+      return {
+        getSelectedIds: () => Array.from(selected.keys()),
+        setGroups: (nextGroups) => {
+          groups = Array.isArray(nextGroups) ? nextGroups : []
+          statusText = groups.length ? '请选择用户组' : '暂无用户组'
+          renderValues()
+          renderMenu()
+        },
+        setStatus: (text) => {
+          groups = []
+          selected.clear()
+          statusText = text
+          renderValues()
+          renderMenu()
+        },
+      }
+    }
+
     const socksHost = field('SOCKS5 IP / 域名', 'text', '例如 203.0.113.10')
     const socksPort = field('SOCKS5 端口', 'number', '1 - 65535')
     const socksUsername = field('SOCKS5 用户名', 'text', '无认证可留空')
     const socksPassword = field('SOCKS5 密码', 'password', '无认证可留空')
     const machineSelect = selectField('运行机器')
-    const groupSelect = selectField('用户组')
+    const groupPicker = groupPickerField('用户组（可多选）')
     const nodeHost = field('VLESS 入口地址', 'text', 'Xboard-Node 的公网 IP 或域名')
     const nodeName = field('节点名称', 'text', 'VLESS Reality 高速中转')
     const serverName = field('Reality SNI', 'text', 'www.cloudflare.com')
@@ -356,7 +536,7 @@
     fullWidth.style.gridColumn = '1 / -1'
 
     machineSelect.innerHTML = '<option value="">正在加载机器…</option>'
-    groupSelect.innerHTML = '<option value="">正在加载用户组…</option>'
+    groupPicker.setStatus('正在加载用户组…')
     const base = detectAdminBase()
     Promise.all([loadMachines(base), loadGroups(base)]).then(([machinesRes, groupsRes]) => {
       const machines = Array.isArray(machinesRes && machinesRes.data) ? machinesRes.data : []
@@ -369,16 +549,10 @@
         machineSelect.appendChild(option)
       })
       const groups = Array.isArray(groupsRes && groupsRes.data) ? groupsRes.data : []
-      groupSelect.innerHTML = '<option value="">请选择用户组</option>'
-      groups.forEach((group) => {
-        const option = document.createElement('option')
-        option.value = String(group.id)
-        option.textContent = `${group.name}（ID ${group.id}）`
-        groupSelect.appendChild(option)
-      })
+      groupPicker.setGroups(groups)
     }).catch((err) => {
       machineSelect.innerHTML = '<option value="">机器加载失败</option>'
-      groupSelect.innerHTML = '<option value="">用户组加载失败</option>'
+      groupPicker.setStatus('用户组加载失败')
       console.error(err)
     })
 
@@ -408,13 +582,14 @@
     })
 
     button.addEventListener('click', async () => {
+      const selectedGroupIds = groupPicker.getSelectedIds()
       const payload = {
         socks_host: socksHost.value.trim(),
         socks_port: Number(socksPort.value),
         socks_username: socksUsername.value,
         socks_password: socksPassword.value,
         machine_id: Number(machineSelect.value),
-        group_ids: groupSelect.value ? [Number(groupSelect.value)] : [],
+        group_ids: selectedGroupIds,
         node_host: nodeHost.value.trim(),
         name: nodeName.value.trim(),
         server_name: serverName.value.trim(),
@@ -455,10 +630,113 @@
     hint.style.color = '#475569'
     hint.style.marginTop = '8px'
 
+    const batchCard = createCard('批量一键添加 SOCKS5 中转', '导入 TXT 后按顺序检测并创建 1–30 个节点。用户组 ID 支持英文逗号分隔多个值。格式：VLESS入口地址:节点名称:运行机器SID:用户组ID:SOCKS5 IP:端口:用户:密码')
+    batchCard.style.marginTop = '18px'
+
+    const fileInput = document.createElement('input')
+    fileInput.type = 'file'
+    fileInput.accept = '.txt,text/plain'
+    Object.assign(fileInput.style, {
+      display: 'block', width: '100%', marginBottom: '10px', color: '#334155',
+    })
+
+    const batchText = document.createElement('textarea')
+    batchText.rows = 7
+    batchText.placeholder = [
+      '每行一个节点，例如：',
+      'hk-entry.example.com:香港落地01:1:2,3:203.0.113.10:1080:user01:password01',
+      'hk-entry.example.com:香港落地02:3:2,3,4:203.0.113.11:1080:user02:password02',
+    ].join('\n')
+    Object.assign(batchText.style, {
+      width: '100%', padding: '11px 12px', borderRadius: '12px',
+      border: '1px solid #cbd5e1', fontSize: '13px', boxSizing: 'border-box',
+      resize: 'vertical', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    })
+
+    const batchButton = document.createElement('button')
+    batchButton.textContent = '检测并批量创建'
+    Object.assign(batchButton.style, {
+      padding: '11px 16px', borderRadius: '12px', background: '#0f172a',
+      color: '#fff', border: 'none', cursor: 'pointer', marginTop: '12px',
+    })
+
+    const batchResult = document.createElement('pre')
+    Object.assign(batchResult.style, {
+      display: 'none', background: '#fff', border: '1px solid #e2e8f0',
+      borderRadius: '12px', padding: '12px', whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word', maxHeight: '320px', overflowY: 'auto', marginTop: '12px',
+    })
+
+    fileInput.addEventListener('change', async () => {
+      const file = fileInput.files && fileInput.files[0]
+      if (!file) return
+      if (file.size > 64 * 1024) {
+        alert('TXT 文件不能超过 64 KB')
+        fileInput.value = ''
+        return
+      }
+      batchText.value = await file.text()
+    })
+
+    batchButton.addEventListener('click', async () => {
+      const parsed = parseBatchRelayText(batchText.value)
+      batchResult.style.display = 'block'
+      if (parsed.errors.length) {
+        batchResult.textContent = ['TXT 校验失败', ...parsed.errors].join('\n')
+        return
+      }
+
+      batchButton.disabled = true
+      button.disabled = true
+      const results = []
+      let succeeded = 0
+      for (let index = 0; index < parsed.entries.length; index += 1) {
+        const entry = parsed.entries[index]
+        batchButton.textContent = `正在处理 ${index + 1}/${parsed.entries.length}`
+        batchResult.textContent = [
+          `正在处理 ${index + 1}/${parsed.entries.length}：${entry.name}`,
+          ...results,
+        ].join('\n')
+        try {
+          const res = await createSocksRealityRelay(base, {
+            socks_host: entry.socksHost,
+            socks_port: entry.port,
+            socks_username: entry.username,
+            socks_password: entry.password,
+            machine_id: entry.machineId,
+            group_ids: entry.groupIds,
+            node_host: entry.nodeHost,
+            name: entry.name,
+            server_name: serverName.value.trim() || 'www.cloudflare.com',
+          })
+          succeeded += 1
+          const data = (res && res.data) || {}
+          results.push(`✅ 第 ${entry.lineNumber} 行 ${entry.name}：SID ${entry.machineId} / 用户组 ${entry.groupIds.join(',')}，${data.host || entry.nodeHost}:${data.port || '-'}，出口 ${data.exit_ip || '-'}`)
+        } catch (err) {
+          results.push(`❌ 第 ${entry.lineNumber} 行 ${entry.name}：${(err && err.message) || '创建失败'}`)
+        }
+      }
+      batchText.value = ''
+      fileInput.value = ''
+      batchResult.textContent = [
+        `批量任务完成：成功 ${succeeded}，失败 ${parsed.entries.length - succeeded}，共 ${parsed.entries.length}`,
+        ...results,
+      ].join('\n')
+      batchButton.disabled = false
+      button.disabled = false
+      batchButton.textContent = '检测并批量创建'
+    })
+
+    batchCard.appendChild(fileInput)
+    batchCard.appendChild(batchText)
+    batchCard.appendChild(batchButton)
+    batchCard.appendChild(batchResult)
+
     container.appendChild(form)
     container.appendChild(button)
     container.appendChild(hint)
     container.appendChild(resultBox)
+    container.appendChild(batchCard)
   }
 
   function renderTemplateTab(container) {

@@ -81,7 +81,7 @@
 
 <body>
   <div id="root"></div>
-  <script src="/assets/admin/assets/xb-relay-helper.js?v=20260813-toolbar-4"></script>
+  <script src="/assets/admin/assets/xb-relay-helper-v2.js?v=20260814-1"></script>
 </body>
 
 </html>
