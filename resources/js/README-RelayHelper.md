@@ -1,7 +1,7 @@
 RelayHelper React 组件集成说明
 
 1) 目的
-- 将 `xb-relay-helper.js` 的功能正式集成到 admin 前端源码（React），提供“协议画廊”和“粘贴创建中转”功能，调用后端 API：
+- 将 `xb-relay-helper-v2.js` 的功能正式集成到 admin 前端源码（React），提供“协议画廊”、单条中转和批量 TXT 中转功能，调用后端 API：
   - POST `/server/manage/template/generate-templates`
   - POST `/server/manage/template/generate-relay`
 

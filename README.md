@@ -104,9 +104,26 @@ https://raw.githubusercontent.com/a541825089/Xboard-Node/dev/install-source.sh
 
 进入“节点管理”，点击“XBoard 中转助手”：
 
+### 批量导入 TXT
+
+“一键中转”页面支持一次导入 1–30 个 SOCKS5 落地。每行格式为：
+
+```text
+VLESS入口地址:节点名称:运行机器SID:用户组ID:SOCKS5 IP:端口:用户:密码
+```
+
+示例：
+
+```text
+hk-entry.example.com:香港落地01:1:2,3:203.0.113.10:1080:user01:password01
+hk-entry.example.com:香港落地02:3:2,3,4:203.0.113.11:1080:user02:password02
+```
+
+每一行分别绑定运行机器 SID 和用户组 ID；多个用户组 ID 使用英文逗号分隔，例如 `2,3,4`。Reality SNI 由本批次共用。系统按行顺序执行 SOCKS5 连通性检测、Reality 密钥生成和空闲端口分配，并为每行返回独立结果。空行和以 `#` 开头的注释行会被忽略。当前文本格式仅支持 IPv4 或域名；字段本身不能包含英文冒号。
+
 1. 输入 SOCKS5 IP/域名、端口、账号和密码；
 2. 选择运行机器（已部署 Xboard-Node 的服务器）；
-3. 选择用户组；
+3. 打开用户组下拉列表，勾选一个或多个用户组；已选用户组会显示为可单独移除的标签；
 4. 填写 VLESS 对外地址、节点名称和 Reality SNI；
 5. 点击检测并创建。
 
